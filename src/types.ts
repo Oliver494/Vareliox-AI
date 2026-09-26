@@ -113,6 +113,7 @@ export type ChatMessage = {
   uploads?: Omit<ChatUpload, "data">[];
   contextReferences?: ContextReference[];
   appliedChanges?: AppliedChange[];
+  recoverySnapshotId?: string;
   generatedMedia?: MediaGenerationResult;
   webSearchAttempted?: boolean;
   webSearchError?: string;
@@ -156,7 +157,7 @@ export type MediaGenerationResult = { mediaType: MediaMode; dataUrl: string; see
 
 export type AgentState = "idle" | "analyzing" | "planning" | "awaiting_approval" | "executing" | "testing" | "correcting" | "completed" | "cancelled" | "failed" | "interrupted";
 export type AgentStep = { id: string; label: string; status: "pending" | "in_progress" | "completed" | "failed"; detail?: string };
-export type AgentTask = { id: string; state: AgentState; startedAt: number; updatedAt: number; steps: AgentStep[]; command?: string; output?: string; exitCode?: number | null; durationMs?: number; truncated?: boolean };
+export type AgentTask = { id: string; state: AgentState; startedAt: number; updatedAt: number; steps: AgentStep[]; ownerMessageId?: string; command?: string; output?: string; exitCode?: number | null; durationMs?: number; truncated?: boolean };
 export type AgentToolSpec = { id: string; description: string; risk: "low" | "medium" | "high"; permission: "read" | "write" | "execute" | "destructive"; timeoutSecs: number; cancellable: boolean };
 export type DetectedCommand = { id: string; label: string; program: string; args: string[]; kind: "test" | "build" | "check" };
 export type AgentCommandEvent =

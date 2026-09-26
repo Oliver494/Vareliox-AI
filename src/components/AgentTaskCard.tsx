@@ -6,13 +6,35 @@ type Props = { task: AgentTask; pending?: DetectedCommand | null; busy: boolean;
 export function AgentTaskCard({ task, pending, busy, onApprove, onApproveTask, onReject, onStop, onResume }: Props) {
   const { t } = usePreferences();
   const active = ["analyzing","planning","executing","testing","correcting"].includes(task.state);
+  const forceOpen = !!pending || active || task.state === "awaiting_approval" || task.state === "interrupted";
+  const label = pending || task.state === "awaiting_approval"
+    ? t("Quiere ejecutar un comando", "Wants to run a command")
+    : active
+      ? t("Ejecutando comandos", "Running commands")
+      : task.state === "completed"
+        ? t("Ha ejecutado comandos", "Ran commands")
+        : task.state === "failed"
+          ? t("El comando falló", "Command failed")
+          : task.state === "cancelled"
+            ? t("Comando cancelado", "Command cancelled")
+            : t("Ejecución interrumpida", "Execution interrupted");
   return <section className={`agent-task-card agent-task-card--${task.state}`}>
-    <header><span>{active ? <LoaderCircle className="spin" size={14} /> : task.state === "completed" ? <Check size={14} /> : ["failed","interrupted"].includes(task.state) ? <CircleAlert size={14} /> : <Terminal size={14} />}</span><div><strong>{pending ? t("Permiso para ejecutar", "Permission to run") : task.state === "completed" ? t("Tarea completada", "Task completed") : task.state === "failed" ? t("La verificación falló", "Verification failed") : task.state === "interrupted" ? t("Tarea interrumpida", "Task interrupted") : task.state === "cancelled" ? t("Tarea detenida", "Task stopped") : t("Agente trabajando", "Agent working")}</strong><small>{task.state === "interrupted" ? t("Vareliox se cerró antes de terminar. Puedes continuar sin perder el chat.", "Vareliox closed before finishing. You can continue without losing the chat.") : task.command || t("Preparando la tarea", "Preparing task")}</small></div>{task.durationMs !== undefined && <em><Clock3 size={11} />{(task.durationMs / 1000).toFixed(1)} s</em>}</header>
-    <div className="agent-steps">{task.steps.map((step) => <span key={step.id} className={`is-${step.status}`}>{step.status === "in_progress" ? <LoaderCircle className="spin" size={11} /> : step.status === "completed" ? <Check size={11} /> : step.status === "failed" ? <CircleAlert size={11} /> : <i />}{step.label}</span>)}</div>
-    {pending && <div className="agent-approval"><p><ShieldCheck size={13} />{pending.id === "nova-terminal" ? t("Vareliox usará el nivel y el intérprete elegidos en Configuración > Terminal. Revisa el comando antes de aprobarlo.", "Vareliox will use the level and shell selected in Settings > Terminal. Review the command before approving it.") : t("Se ejecutará dentro del proyecto. No usa una shell ni puede salir de la carpeta asignada.", "It will run inside the project. It does not use a shell and cannot leave the assigned folder.")}</p><div><button onClick={onReject} disabled={busy}>{t("Rechazar", "Reject")}</button>{onApproveTask && <button onClick={onApproveTask} disabled={busy}>{t("Aprobar para esta tarea", "Approve for this task")}</button>}<button className="is-primary" onClick={onApprove} disabled={busy}><Play size={12} />{t("Aprobar", "Approve")}</button></div></div>}
-    {task.output && <details><summary><ChevronDown size={12} />{t("Salida del comando", "Command output")}{task.truncated ? t(" · truncada", " · truncated") : ""}</summary><pre>{task.output}</pre></details>}
-    {task.exitCode !== undefined && <small>{t("Código de salida", "Exit code")}: {task.exitCode ?? "?"}</small>}
-    {active && onStop && <footer><button onClick={onStop}><Square size={11} fill="currentColor" />{t("Detener proceso", "Stop process")}</button></footer>}
-    {task.state === "interrupted" && onResume && <footer><button className="is-primary" onClick={onResume}><Play size={11} />{t("Continuar tarea", "Resume task")}</button></footer>}
+    <details open={forceOpen || undefined}>
+      <summary>
+        <span className="agent-task-card__icon">{active ? <LoaderCircle className="spin" size={13} /> : task.state === "completed" ? <Check size={13} /> : ["failed","interrupted"].includes(task.state) ? <CircleAlert size={13} /> : <Terminal size={13} />}</span>
+        <strong>{label}</strong>
+        {task.durationMs !== undefined && <em><Clock3 size={11} />{(task.durationMs / 1000).toFixed(1)} s</em>}
+        <ChevronDown className="agent-task-card__chevron" size={13} />
+      </summary>
+      <div className="agent-task-card__details">
+        {task.command && <code>{task.command}</code>}
+        <div className="agent-steps">{task.steps.map((step) => <span key={step.id} className={`is-${step.status}`}>{step.status === "in_progress" ? <LoaderCircle className="spin" size={11} /> : step.status === "completed" ? <Check size={11} /> : step.status === "failed" ? <CircleAlert size={11} /> : <i />}{step.label}</span>)}</div>
+        {pending && <div className="agent-approval"><p><ShieldCheck size={13} />{pending.id === "nova-terminal" ? t("Revisa el comando. Se ejecutará con el nivel elegido en Configuración > Terminal.", "Review the command. It will run with the level selected in Settings > Terminal.") : t("Se ejecutará dentro del proyecto y no podrá salir de la carpeta asignada.", "It will run inside the project and cannot leave its assigned folder.")}</p><div><button onClick={onReject} disabled={busy}>{t("Denegar", "Deny")}</button>{onApproveTask && <button onClick={onApproveTask} disabled={busy}>{t("Permitir esta tarea", "Allow for this task")}</button>}<button className="is-primary" onClick={onApprove} disabled={busy}><Play size={12} />{t("Permitir", "Allow")}</button></div></div>}
+        {task.output && <div className="agent-task-output"><span>{t("Salida", "Output")}{task.truncated ? t(" · truncada", " · truncated") : ""}</span><pre>{task.output}</pre></div>}
+        {task.exitCode !== undefined && <small>{t("Código de salida", "Exit code")}: {task.exitCode ?? "?"}</small>}
+        {active && onStop && <footer><button onClick={onStop}><Square size={11} fill="currentColor" />{t("Detener", "Stop")}</button></footer>}
+        {task.state === "interrupted" && onResume && <footer><button className="is-primary" onClick={onResume}><Play size={11} />{t("Continuar", "Resume")}</button></footer>}
+      </div>
+    </details>
   </section>;
 }

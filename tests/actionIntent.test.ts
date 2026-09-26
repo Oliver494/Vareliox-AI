@@ -19,6 +19,15 @@ test("reconoce peticiones naturales para crear y editar archivos", () => {
     "mejora la función de renderizado del pájaro",
     "cambia el fondo del juego",
     "arregla el proyecto",
+    "elimíname los archivos de la carpeta temp",
+    "bórrame cache/old.json",
+    "renómbrame config.old a config.json",
+    "muéveme el archivo a src",
+    "quiero que borres los archivos temporales",
+    "necesito que elimines la carpeta cache",
+    "puedes renombrar el archivo de configuración",
+    "crea un archivo en C:\\abuela",
+    "pero haz el archivo aquí en esta ruta C:\\Users\\Usuario\\Downloads",
     "make a login page",
     "fix the current file",
   ]) {
@@ -26,13 +35,16 @@ test("reconoce peticiones naturales para crear y editar archivos", () => {
   }
 });
 
-test("no convierte preguntas o carpetas externas en escrituras", () => {
+test("no convierte preguntas o inspecciones en escrituras", () => {
   for (const prompt of [
     "puedes ver esta carpeta?",
     "qué archivos hay en el proyecto",
     "cómo crear un archivo html",
     "explica cómo editar index.html",
-    "crea un archivo en C:\\abuela",
+    "dame los pasos para poner mi bot de Discord",
+    "dame instrucciones para instalar y ejecutar el bot",
+    "hazme una guía para configurar el bot",
+    "puedes ver esta carpeta C:\\abuela?",
     "hola",
   ]) {
     assert.equal(requestsProjectAction(prompt, []), false, prompt);
@@ -47,4 +59,9 @@ test("una continuación hereda solamente una tarea de escritura anterior", () =>
     { role: "assistant", content: "Necesito confirmar el formato" },
     { role: "user", content: "sí" },
   ]), true);
+});
+
+test("una guía no hereda una operación anterior", () => {
+  assert.equal(requestsProjectAction("dame los pasos para poner mi bot de Discord", history("créame un bot de Discord")), false);
+  assert.equal(requestsProjectAction("haz una guía en README.md", history("créame un bot de Discord")), true);
 });

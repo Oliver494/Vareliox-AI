@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { archiveConversation, conversationMatches, duplicateConversation, isConversationBusy, pinConversation, renameConversation, sortConversations } from "../src/services/conversationActions.ts";
+import { archiveConversation, conversationMatches, duplicateConversation, isConversationBusy, pinConversation, renameConversation, shouldRequestApproval, sortConversations } from "../src/services/conversationActions.ts";
 import { createConversation, loadConversations, migrateConversation, saveConversations } from "../src/services/conversations.ts";
 import type { Conversation } from "../src/types.ts";
 
@@ -22,6 +22,12 @@ function conversation(id: string, overrides: Partial<Conversation> = {}): Conver
     ...overrides,
   };
 }
+
+test("solo el modo solicitar aprobación detiene comandos para pedir permiso", () => {
+  assert.equal(shouldRequestApproval("ask"), true);
+  assert.equal(shouldRequestApproval("auto"), false);
+  assert.equal(shouldRequestApproval("full"), false);
+});
 
 test("fija, desfija y conserva el orden manual de los fijados", () => {
   let items = [conversation("a"), conversation("b")];

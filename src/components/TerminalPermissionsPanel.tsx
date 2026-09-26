@@ -8,15 +8,15 @@ export function TerminalPermissionsPanel() {
   const levels: { id: TerminalAccess; title: string; description: string; icon: typeof Shield }[] = [
     { id: "disabled", title: t("Desactivada", "Disabled"), description: t("Vareliox no puede ejecutar ningún comando.", "Vareliox cannot run any commands."), icon: Shield },
     { id: "project", title: t("Herramientas del proyecto", "Project tools"), description: t("Solo pruebas, compilaciones y programas de una lista segura dentro del proyecto.", "Only tests, builds, and allowlisted programs inside the project."), icon: Command },
-    { id: "shell", title: t("Terminal del usuario", "User terminal"), description: t("Permite comandos completos con tus permisos normales de Windows o Linux.", "Allow full commands with your normal Windows or Linux permissions."), icon: SquareTerminal },
+    { id: "shell", title: t("Terminal del usuario", "User terminal"), description: t("Permite comandos completos con tus permisos normales de Windows, macOS o Linux.", "Allow full commands with your normal Windows, macOS, or Linux permissions."), icon: SquareTerminal },
     { id: "admin", title: t("Administrador", "Administrator"), description: t("Usa los permisos actuales de Vareliox. La elevación automática aún no está implementada.", "Uses Vareliox’s current permissions. Automatic elevation is not implemented yet."), icon: ShieldAlert },
   ];
   const shells: { id: TerminalShell; label: string; platforms: string }[] = [
     { id: "automatic", label: t("Automática", "Automatic"), platforms: t("Recomendada para el sistema actual", "Recommended for the current system") },
     { id: "cmd", label: "Command Prompt (CMD)", platforms: "Windows" },
     { id: "powershell", label: "PowerShell", platforms: "Windows" },
-    { id: "bash", label: "Bash", platforms: "Linux" },
-    { id: "zsh", label: "Zsh", platforms: "Linux" },
+    { id: "bash", label: "Bash", platforms: "Linux / macOS" },
+    { id: "zsh", label: "Zsh", platforms: "macOS / Linux" },
   ];
   const isWindows = /Windows/i.test(navigator.userAgent);
   const availableShells = shells.filter((shell) => shell.id === "automatic" || (isWindows ? shell.id === "cmd" || shell.id === "powershell" : shell.id === "bash" || shell.id === "zsh"));

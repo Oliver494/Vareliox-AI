@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>A local-first AI coding assistant for Windows and Linux that explains what is happening.</strong>
+  <strong>A local-first AI coding assistant for Windows, macOS, and Linux that explains what is happening.</strong>
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Oliver494/Vareliox-AI/releases/latest">Download for Windows or Linux</a> ·
+  <a href="https://github.com/Oliver494/Vareliox-AI/releases/latest">Download for Windows, macOS, or Linux</a> ·
   <a href="README.es.md">Español</a> ·
   <a href="ROADMAP.md">Roadmap</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -46,12 +46,13 @@ There is no Vareliox account, hosted project copy, or required subscription. Bri
 Download the package for your operating system from [Releases](https://github.com/Oliver494/Vareliox-AI/releases/latest):
 
 - **Windows:** run the x64 `.exe` installer.
+- **macOS (Apple Silicon or Intel):** open the universal `.dmg` and drag Vareliox into Applications.
 - **Kali Linux / Debian / Ubuntu:** download the x86_64 `.deb` and install it with `sudo apt install ./Vareliox*.deb` from its download folder.
 - **Other x86_64 Linux distributions:** download the `.AppImage`, run `chmod +x ./Vareliox*.AppImage`, then open it with `./Vareliox*.AppImage`.
 
 End users do **not** need Node.js, Rust, Git, Ollama, or LM Studio to install the app. You only need Ollama or LM Studio if you want to use local models.
 
-Windows may show a SmartScreen warning while the project does not yet have a trusted code-signing certificate. Linux packages are also currently unsigned. Always download packages from this repository's official Releases page.
+Windows may show a SmartScreen warning while the project does not yet have a trusted code-signing certificate. The macOS build is ad-hoc signed, so macOS can require approval in Privacy & Security until the project has an Apple Developer certificate and notarization. Linux packages are also currently unsigned. Always download packages from this repository's official Releases page.
 
 ## Quick start
 
@@ -102,7 +103,7 @@ Provider availability depends on your own installation, account, billing, model 
 - Use request-by-request approval, automatic approval for the task, or a deliberate full-access mode.
 - Authorize an additional external folder as **read-only** or **editable**; the model cannot access it until you explicitly select it.
 - Choose between a disabled terminal, allowlisted project tools, a normal user shell, or an administrator shell. Model-requested commands are shown before execution and their real output is returned to the model.
-- Use CMD or PowerShell on Windows and Bash or Zsh on Linux. Administrator mode relies on UAC or the Linux authorization agent and never reads a password.
+- Use CMD or PowerShell on Windows and Bash or Zsh on macOS and Linux. Administrator mode uses the current Vareliox process permissions and never reads a password.
 - Keep file access project-only by default or deliberately authorize all filesystem roots. External changes always require review and Vareliox does not scan the full disk automatically.
 - Recover recent agent file operations from local snapshots.
 
@@ -124,6 +125,7 @@ Read [SECURITY.md](SECURITY.md) before enabling agent permissions and [PRIVACY.m
 - Node.js 22 or newer
 - Rust stable
 - Windows: Microsoft C++ Build Tools and the WebView2 requirements for Tauri 2
+- macOS: Xcode Command Line Tools
 - Linux: WebKitGTK 4.1 and the native Tauri build dependencies listed below
 
 ### Run locally
@@ -157,6 +159,19 @@ npm run build:linux
 ```
 
 The generated packages are placed in `src-tauri/target/release/bundle/deb/` and `src-tauri/target/release/bundle/appimage/`. On minimal Kali installations, install and start `gnome-keyring` so Vareliox can store API keys through the Linux Secret Service.
+
+### Build the universal macOS installer
+
+Run this on macOS with Xcode Command Line Tools installed:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm ci
+npm run test:all
+npm run build:macos
+```
+
+The universal `.dmg` is generated in `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`. The same build is available as the manually triggered **Build macOS installer** GitHub Actions workflow.
 
 See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/QA.md](docs/QA.md), and [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for more detail.
 

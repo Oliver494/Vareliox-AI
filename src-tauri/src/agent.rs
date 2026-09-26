@@ -279,7 +279,7 @@ fn allowed_program(value: &str) -> Option<&'static str> {
         "systeminfo" if cfg!(target_os = "windows") => Some("systeminfo"),
         "wmic" if cfg!(target_os = "windows") => Some("wmic"),
         "df" if !cfg!(target_os = "windows") => Some("df"),
-        "free" if !cfg!(target_os = "windows") => Some("free"),
+        "free" if cfg!(target_os = "linux") => Some("free"),
         "uname" if !cfg!(target_os = "windows") => Some("uname"),
         "ls" if !cfg!(target_os = "windows") => Some("ls"),
         "pwd" if !cfg!(target_os = "windows") => Some("pwd"),
@@ -365,8 +365,10 @@ fn shell_command(request: &AgentCommandRequest) -> Result<Option<(String, Vec<St
     {
         let shell = match request.shell.as_str() {
             "zsh" => "/bin/zsh",
-            "bash" | "automatic" | "" => "/bin/bash",
-            _ => return Err("Ese intérprete no está disponible en Linux.".into()),
+            "bash" => "/bin/bash",
+            "automatic" | "" if cfg!(target_os = "macos") => "/bin/zsh",
+            "automatic" | "" => "/bin/bash",
+            _ => return Err("Ese intérprete no está disponible en este sistema.".into()),
         };
         if !Path::new(shell).is_file() {
             return Err(format!("No se encontró {shell} en este equipo."));

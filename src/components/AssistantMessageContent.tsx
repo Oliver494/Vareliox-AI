@@ -89,7 +89,7 @@ function inlineMarkdown(value: string): ReactNode[] {
 }
 
 function isBlockStart(line: string) {
-  return /^(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*|---+\s*$)/.test(line);
+  return /^\s{0,3}(?:#{1,6}\s+|[-*+•●▪‣]\s+|\d+[.)]\s+|>\s*|---+\s*$)/.test(line);
 }
 
 function MarkdownText({ content }: { content: string }) {
@@ -99,21 +99,21 @@ function MarkdownText({ content }: { content: string }) {
   while (cursor < lines.length) {
     const line = lines[cursor];
     if (!line.trim()) { cursor += 1; continue; }
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+)$/);
     if (heading) {
       const Tag = `h${heading[1].length}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
       blocks.push(<Tag key={`heading-${cursor}`}>{inlineMarkdown(heading[2])}</Tag>);
       cursor += 1;
       continue;
     }
-    if (/^---+\s*$/.test(line)) { blocks.push(<hr key={`rule-${cursor}`} />); cursor += 1; continue; }
-    const unordered = line.match(/^[-*+]\s+(.+)$/);
-    const ordered = line.match(/^\d+[.)]\s+(.+)$/);
+    if (/^\s{0,3}---+\s*$/.test(line)) { blocks.push(<hr key={`rule-${cursor}`} />); cursor += 1; continue; }
+    const unordered = line.match(/^\s{0,3}[-*+•●▪‣]\s+(.+)$/);
+    const ordered = line.match(/^\s{0,3}\d+[.)]\s+(.+)$/);
     if (unordered || ordered) {
       const entries: ReactNode[] = [];
       const orderedList = !!ordered;
       while (cursor < lines.length) {
-        const item = orderedList ? lines[cursor].match(/^\d+[.)]\s+(.+)$/) : lines[cursor].match(/^[-*+]\s+(.+)$/);
+        const item = orderedList ? lines[cursor].match(/^\s{0,3}\d+[.)]\s+(.+)$/) : lines[cursor].match(/^\s{0,3}[-*+•●▪‣]\s+(.+)$/);
         if (!item) break;
         entries.push(<li key={`item-${cursor}`}>{inlineMarkdown(item[1])}</li>);
         cursor += 1;
@@ -121,7 +121,7 @@ function MarkdownText({ content }: { content: string }) {
       blocks.push(orderedList ? <ol key={`list-${cursor}`}>{entries}</ol> : <ul key={`list-${cursor}`}>{entries}</ul>);
       continue;
     }
-    const quote = line.match(/^>\s?(.*)$/);
+    const quote = line.match(/^\s{0,3}>\s?(.*)$/);
     if (quote) { blocks.push(<blockquote key={`quote-${cursor}`}>{inlineMarkdown(quote[1])}</blockquote>); cursor += 1; continue; }
     const paragraph: string[] = [line];
     cursor += 1;

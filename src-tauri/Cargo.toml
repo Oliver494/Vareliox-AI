@@ -1,6 +1,6 @@
 [package]
 name = "vareliox"
-version = "0.1.7"
+version = "0.1.9"
 description = "A local-first AI workspace for chat, code, and media"
 authors = ["Vareliox contributors"]
 edition = "2021"

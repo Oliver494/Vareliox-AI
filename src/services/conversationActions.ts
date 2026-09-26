@@ -45,6 +45,10 @@ export function isConversationBusy(conversation: Conversation, generatingConvers
   return generatingConversationId === conversation.id || !!conversation.agentTask && activeAgentStates.includes(conversation.agentTask.state);
 }
 
+export function shouldRequestApproval(mode: Conversation["approvalMode"]) {
+  return mode === "ask";
+}
+
 export function conversationMarkdown(conversation: Conversation) {
   return `# ${conversation.title}\n\n${conversation.messages.map((item) => `## ${item.role === "user" ? "Tú" : "Vareliox"}\n\n${item.content}`).join("\n\n")}`;
 }

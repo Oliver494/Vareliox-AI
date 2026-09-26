@@ -2,7 +2,7 @@
 
 Español · [English](README.md)
 
-Vareliox es un espacio de trabajo de IA open source, centrado en IA local y diseñado para Windows y Linux. Permite conversar, crear contenido y trabajar como agente sobre carpetas reales con proveedores locales o externos, sin crear una cuenta de Vareliox.
+Vareliox es un espacio de trabajo de IA open source, centrado en IA local y diseñado para Windows, macOS y Linux. Permite conversar, crear contenido y trabajar como agente sobre carpetas reales con proveedores locales o externos, sin crear una cuenta de Vareliox.
 
 > Beta temprana: utiliza Git o una copia de seguridad para proyectos importantes. Las funciones de agente pueden modificar archivos y ejecutar un conjunto restringido de comandos del proyecto.
 
@@ -27,7 +27,7 @@ Vareliox es un espacio de trabajo de IA open source, centrado en IA local y dise
 - API keys guardadas mediante el almacén seguro del sistema operativo.
 - Selección de modelos y control de esfuerzo cuando el modelo lo permite.
 - Operaciones de archivos con revisión y modos de permiso.
-- Terminal configurable: desactivada, herramientas seguras, shell normal o administrador; CMD/PowerShell en Windows y Bash/Zsh en Linux.
+- Terminal configurable: desactivada, herramientas seguras, shell normal o administrador; CMD/PowerShell en Windows y Bash/Zsh en macOS y Linux.
 - La salida real de los comandos vuelve al modelo para que pueda responder con datos comprobados del equipo.
 - Acceso al sistema de archivos limitado al proyecto de fábrica, con acceso completo opcional y revisión obligatoria fuera del proyecto.
 - Catálogo de modelos locales para Ollama y LM Studio.
@@ -42,7 +42,7 @@ Lee [SECURITY.md](SECURITY.md) antes de activar permisos de agente y [PRIVACY.md
 
 ## Instalación
 
-Descarga desde Releases el instalador `.exe` para Windows, el paquete `.deb` para Kali/Debian/Ubuntu o la AppImage para otras distribuciones Linux x86_64. En Kali, abre la carpeta de descarga e instala el paquete con `sudo apt install ./Vareliox*.deb`. Windows puede mostrar una advertencia de SmartScreen y los paquetes Linux todavía no están firmados.
+Descarga desde Releases el instalador `.exe` para Windows, el `.dmg` universal para Mac con Apple Silicon o Intel, el paquete `.deb` para Kali/Debian/Ubuntu o la AppImage para otras distribuciones Linux x86_64. En macOS, abre el `.dmg` y arrastra Vareliox a Aplicaciones. La compilación de macOS usa firma ad hoc, por lo que puede requerir autorización en Privacidad y seguridad hasta disponer de certificado y notarización de Apple. En Kali, instala el paquete con `sudo apt install ./Vareliox*.deb`.
 
 Los usuarios finales no necesitan instalar Node.js ni Rust.
 
@@ -69,6 +69,17 @@ sudo apt install -y build-essential curl wget file libwebkit2gtk-4.1-dev \
 npm ci
 npm run build:linux
 ```
+
+En macOS con Xcode Command Line Tools:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm ci
+npm run test:all
+npm run build:macos
+```
+
+El `.dmg` universal se genera en `src-tauri/target/universal-apple-darwin/release/bundle/dmg/`. También puede compilarse mediante el flujo manual **Build macOS installer** de GitHub Actions.
 
 Consulta [ROADMAP.md](ROADMAP.md), [CONTRIBUTING.md](CONTRIBUTING.md) y [CHANGELOG.md](CHANGELOG.md).
 

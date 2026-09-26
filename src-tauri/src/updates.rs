@@ -119,11 +119,13 @@ fn installer_rank(name: &str, os: &str, arch: &str) -> Option<u8> {
     let name = name.to_ascii_lowercase();
     let is_arm = name.contains("aarch64") || name.contains("arm64");
     let is_x64 = name.contains("x86_64") || name.contains("amd64") || name.contains("x64");
-    let architecture_matches = match arch {
-        "aarch64" => is_arm,
-        "x86_64" => is_x64,
-        _ => !is_arm && !is_x64,
-    };
+    let is_universal = name.contains("universal");
+    let architecture_matches = is_universal
+        || match arch {
+            "aarch64" => is_arm,
+            "x86_64" => is_x64,
+            _ => !is_arm && !is_x64,
+        };
     if !architecture_matches {
         return None;
     }
@@ -131,6 +133,8 @@ fn installer_rank(name: &str, os: &str, arch: &str) -> Option<u8> {
         "windows" if name.ends_with(".exe") => Some(0),
         "linux" if name.ends_with(".deb") => Some(0),
         "linux" if name.ends_with(".appimage") => Some(1),
+        "macos" if name.ends_with(".dmg") && is_universal => Some(0),
+        "macos" if name.ends_with(".dmg") => Some(1),
         _ => None,
     }
 }
@@ -197,7 +201,10 @@ async fn fetch_releases(
     let client = match Client::builder()
         .connect_timeout(Duration::from_secs(4))
         .timeout(timeout)
-        .redirect(Policy::none())
+        // GitHub redirects API requests when a repository is renamed. Follow a
+        // small, bounded number so branded repository moves do not silently
+        // break update checks while still preventing redirect loops.
+        .redirect(Policy::limited(3))
         .user_agent("Vareliox-Update-Checker")
         .build()
     {
@@ -311,22 +318,26 @@ pub async fn check_for_updates(app: AppHandle, channel: UpdateChannel) -> Update
 }
 
 /// Downloads an installer from the official GitHub release and starts it.
-/// This command is deliberately Windows-only: Linux packages are managed by
-/// the distribution, while the Windows NSIS installer can replace the app
-/// after Vareliox exits.
+/// Windows can run NSIS silently. On macOS the DMG is mounted so the user can
+/// drag Vareliox into Applications. Linux packages remain distribution-managed.
 #[tauri::command]
 pub async fn install_update(app: AppHandle, asset_url: String) -> Result<(), String> {
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = app;
         let _ = asset_url;
-        return Err("La instalación integrada solo está disponible en Windows.".into());
+        return Err("La instalación integrada solo está disponible en Windows y macOS.".into());
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
+        let expected_extension = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ".dmg"
+        };
         if !is_official_download_url(&asset_url)
-            || !asset_url.to_ascii_lowercase().ends_with(".exe")
+            || !asset_url.to_ascii_lowercase().ends_with(expected_extension)
         {
             return Err("El instalador no pertenece a un release oficial de Vareliox.".into());
         }
@@ -353,9 +364,10 @@ pub async fn install_update(app: AppHandle, asset_url: String) -> Result<(), Str
         }
 
         let target = std::env::temp_dir().join(format!(
-            "Vareliox-Update-{}-{}.exe",
+            "Vareliox-Update-{}-{}{}",
             app.package_info().version,
-            now_millis()
+            now_millis(),
+            expected_extension,
         ));
         let mut file = File::create(&target)
             .map_err(|_| "No se pudo preparar el instalador temporal.".to_string())?;
@@ -378,11 +390,22 @@ pub async fn install_update(app: AppHandle, asset_url: String) -> Result<(), Str
             .map_err(|_| "No se pudo finalizar el instalador de la actualización.".to_string())?;
         drop(file);
 
-        Command::new(&target)
-            .arg("/S")
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let mut installer = Command::new(&target);
+            installer.arg("/S");
+            installer.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            installer
+                .spawn()
+                .map_err(|_| "No se pudo iniciar el instalador de la actualización.".to_string())?;
+            app.exit(0);
+        }
+        #[cfg(target_os = "macos")]
+        Command::new("open")
+            .arg(&target)
             .spawn()
-            .map_err(|_| "No se pudo iniciar el instalador de la actualización.".to_string())?;
-        app.exit(0);
+            .map_err(|_| "No se pudo abrir la imagen de instalación de macOS.".to_string())?;
         Ok(())
     }
 }
@@ -422,6 +445,21 @@ mod tests {
             let _ = socket.write_all(&body).await;
         });
         format!("http://{address}/releases")
+    }
+
+    async fn redirect_server(target: String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let response = format!(
+                "HTTP/1.1 301 Moved Permanently\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+        format!("http://{address}/old-repository/releases")
     }
 
     #[test]
@@ -480,6 +518,8 @@ mod tests {
                 GitHubAsset { name: "Vareliox_1.0.0_x64-setup.exe".into(), browser_download_url: "https://github.com/Oliver494/Vareliox-AI/releases/download/v1.0.0/Vareliox_1.0.0_x64-setup.exe".into() },
                 GitHubAsset { name: "Vareliox_1.0.0_amd64.deb".into(), browser_download_url: "https://github.com/Oliver494/Vareliox-AI/releases/download/v1.0.0/Vareliox_1.0.0_amd64.deb".into() },
                 GitHubAsset { name: "Vareliox_1.0.0_amd64.AppImage".into(), browser_download_url: "https://github.com/Oliver494/Vareliox-AI/releases/download/v1.0.0/Vareliox_1.0.0_amd64.AppImage".into() },
+                GitHubAsset { name: "Vareliox_1.0.0_universal.dmg".into(), browser_download_url: "https://github.com/Oliver494/Vareliox-AI/releases/download/v1.0.0/Vareliox_1.0.0_universal.dmg".into() },
+                GitHubAsset { name: "Vareliox_1.0.0_aarch64.dmg".into(), browser_download_url: "https://github.com/Oliver494/Vareliox-AI/releases/download/v1.0.0/Vareliox_1.0.0_aarch64.dmg".into() },
             ],
         };
         assert!(release_asset_url(&release, "windows", "x86_64")
@@ -488,6 +528,12 @@ mod tests {
         assert!(release_asset_url(&release, "linux", "x86_64")
             .unwrap()
             .ends_with(".deb"));
+        assert!(release_asset_url(&release, "macos", "aarch64")
+            .unwrap()
+            .ends_with("_universal.dmg"));
+        assert!(release_asset_url(&release, "macos", "x86_64")
+            .unwrap()
+            .ends_with("_universal.dmg"));
         assert!(release_asset_url(&release, "linux", "aarch64").is_none());
     }
 
@@ -502,6 +548,21 @@ mod tests {
         )
         .await;
         assert_eq!(checked.status, "timeout");
+    }
+
+    #[tokio::test]
+    async fn repository_rename_redirects_are_followed() {
+        let target = mock_server("200 OK", &releases_json(), Duration::ZERO).await;
+        let endpoint = redirect_server(target).await;
+        let checked = fetch_releases(
+            &endpoint,
+            "0.1.1",
+            UpdateChannel::Stable,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(checked.status, "update_available");
+        assert_eq!(checked.release.unwrap().version, "0.1.2");
     }
 
     #[tokio::test]

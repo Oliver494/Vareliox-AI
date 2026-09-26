@@ -25,6 +25,8 @@ async fn run_git(root: &Path, args: &[&str]) -> Result<std::process::Output, Str
         .stderr(Stdio::piped())
         .args(["-c", "color.ui=false", "-c", "core.pager=cat"])
         .args(args);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     timeout(Duration::from_secs(6), command.output())
         .await
         .map_err(|_| "Git tardó demasiado y la operación fue cancelada.".to_string())?

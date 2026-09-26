@@ -1,7 +1,7 @@
 {
   "name": "vareliox",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.9",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
@@ -9,15 +9,19 @@
     "build": "npm run test:translations && tsc && vite build",
     "test:conversations": "node --test --experimental-strip-types tests/conversations.test.ts",
     "test:intents": "node --test --experimental-strip-types tests/actionIntent.test.ts",
+    "test:actions": "node --test --experimental-strip-types tests/actionProtocol.test.ts",
+    "test:targets": "node --test --experimental-strip-types tests/actionTargets.test.ts",
     "test:projects": "node --test --experimental-strip-types tests/projects.test.ts",
+    "test:terminal": "node --test --experimental-strip-types tests/terminalAgent.test.ts",
     "test:translations": "node --test --experimental-strip-types tests/translations.test.ts",
     "test:secrets": "node scripts/check-secrets.mjs",
     "test:agent:local": "node scripts/smoke-agent-ollama.mjs",
-    "test:frontend": "npm run test:translations && npm run test:intents && npm run test:conversations && npm run test:projects && npm run test:secrets",
+    "test:frontend": "npm run test:translations && npm run test:intents && npm run test:actions && npm run test:targets && npm run test:conversations && npm run test:projects && npm run test:terminal && npm run test:secrets",
     "test:all": "npm run test:frontend && cargo test --manifest-path src-tauri/Cargo.toml",
     "check": "npm run test:all && npm run build && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "preview": "vite preview",
     "build:linux": "tauri build --bundles deb,appimage",
+    "build:macos": "tauri build --bundles app,dmg --target universal-apple-darwin",
     "tauri": "tauri"
   },
   "dependencies": {
