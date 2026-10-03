@@ -188,6 +188,27 @@ pub async fn list_models(
             } else {
                 None
             };
+            let lower_id = id.to_lowercase();
+            let mut capabilities = vec!["chat".into()];
+            if [
+                "image",
+                "imagen",
+                "flux",
+                "stable-diffusion",
+                "dall-e",
+                "gpt-image",
+            ]
+            .iter()
+            .any(|needle| lower_id.contains(needle))
+            {
+                capabilities.push("image".into());
+            }
+            if ["video", "wan", "svd", "veo"]
+                .iter()
+                .any(|needle| lower_id.contains(needle))
+            {
+                capabilities.push("video".into());
+            }
             Some(ModelInfo {
                 name: item
                     .get("displayName")
@@ -202,6 +223,7 @@ pub async fn list_models(
                     .or_else(|| item.get("inputTokenLimit"))
                     .or_else(|| item.get("max_input_tokens"))
                     .and_then(Value::as_u64),
+                capabilities,
             })
         })
         .collect();

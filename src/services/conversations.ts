@@ -89,10 +89,10 @@ export function loadConversations(projectPath: string | null, mode: Conversation
         .filter((item): item is Conversation => !!item);
       const chats = legacy.filter((item) => item.assistantMode === "chat")
         .map((item) => ({ ...item, projectPath: null, assistantMode: "chat" as const }));
-      if (chats.length) localStorage.setItem(globalKey, JSON.stringify(mergeUnique(global, chats).slice(0, 100)));
+      if (chats.length) localStorage.setItem(globalKey, JSON.stringify(mergeUnique(global, chats)));
     }
 
-    localStorage.setItem(key, JSON.stringify(selected.slice(0, 100)));
+    localStorage.setItem(key, JSON.stringify(selected));
     return selected;
   } catch {
     return [];
@@ -102,13 +102,29 @@ export function loadConversations(projectPath: string | null, mode: Conversation
 export function saveConversations(projectPath: string | null, conversations: Conversation[], mode: ConversationMode = projectPath ? "code" : "chat"): ConversationSaveResult {
   try {
     const isolated = conversations
-      .filter((item) => item.assistantMode === mode && sameProject(item.projectPath, mode === "chat" ? null : projectPath))
-      .slice(0, 100);
+      .filter((item) => item.assistantMode === mode && sameProject(item.projectPath, mode === "chat" ? null : projectPath));
     localStorage.setItem(storageKey(mode, projectPath), JSON.stringify(isolated));
     return { ok: true };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : "El almacenamiento local no está disponible." };
   }
+}
+
+export function referencedMediaUris() {
+  const uris = new Set<string>();
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(PREFIX) && !key?.startsWith(LEGACY_PREFIX)) continue;
+      for (const conversation of parseStored(key)) {
+        for (const item of conversation.messages ?? []) {
+          const uri = item.generatedMedia?.uri;
+          if (typeof uri === "string" && uri.trim()) uris.add(uri);
+        }
+      }
+    }
+  } catch { /* Storage can be unavailable in hardened environments. */ }
+  return [...uris];
 }
 
 export function createConversation(projectPath: string | null, mode: ConversationMode = projectPath ? "code" : "chat"): Conversation {

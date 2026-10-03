@@ -92,6 +92,37 @@ fn merge_defaults(settings: &mut AiSettings) {
             .iter_mut()
             .find(|item| item.provider == provider)
         {
+            if item.models.chat.trim().is_empty() && !item.model.trim().is_empty() {
+                item.models.chat = item.model.clone();
+            }
+            if item.model.trim().is_empty() && !item.models.chat.trim().is_empty() {
+                item.model = item.models.chat.clone();
+            }
+            if !item.capabilities.iter().any(|value| value == "chat") {
+                item.capabilities.push("chat".into());
+            }
+            if item.provider == ProviderId::Nvidia {
+                if !item.capabilities.iter().any(|value| value == "image") {
+                    item.capabilities.push("image".into());
+                }
+                if !item.capabilities.iter().any(|value| value == "video") {
+                    item.capabilities.push("video".into());
+                }
+                if item.models.image.is_empty() {
+                    item.models.image = "black-forest-labs/flux.1-schnell".into();
+                }
+                if item.models.video.is_empty() {
+                    item.models.video = "stabilityai/stable-video-diffusion".into();
+                }
+            }
+            if matches!(item.provider, ProviderId::OpenAi | ProviderId::Gemini) {
+                if !item.capabilities.iter().any(|value| value == "image") {
+                    item.capabilities.push("image".into());
+                }
+                if item.models.image.is_empty() {
+                    item.models.image = ProviderConfig::defaults(provider).models.image;
+                }
+            }
             if item.config_id.trim().is_empty() {
                 item.config_id = provider.as_str().to_string();
             }
@@ -116,6 +147,12 @@ fn merge_defaults(settings: &mut AiSettings) {
         .iter_mut()
         .filter(|item| item.provider == ProviderId::Custom)
     {
+        if item.models.chat.trim().is_empty() && !item.model.trim().is_empty() {
+            item.models.chat = item.model.clone();
+        }
+        if item.model.trim().is_empty() && !item.models.chat.trim().is_empty() {
+            item.model = item.models.chat.clone();
+        }
         if item.config_id.trim().is_empty() || item.config_id == "custom" {
             item.config_id = if custom_index == 0 {
                 "custom:default".to_string()
@@ -162,6 +199,7 @@ pub fn save(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::types::MediaVerification;
 
     #[test]
     fn provider_keys_use_a_stable_global_credential() {
@@ -237,5 +275,26 @@ mod tests {
         assert_eq!(custom[0].display_name, "DeepSeek");
         assert_eq!(custom[1].display_name, "OpenRouter");
         assert_eq!(settings.active_config_id.as_deref(), Some("custom:default"));
+    }
+
+    #[test]
+    fn custom_media_verification_survives_settings_migration_and_json_roundtrip() {
+        let mut custom = ProviderConfig::defaults(ProviderId::Custom);
+        custom.models.image = "my-image-model".into();
+        custom.media_verification = Some(MediaVerification {
+            endpoint: custom.endpoint.clone(),
+            image_model: custom.models.image.clone(),
+        });
+        let mut settings = AiSettings {
+            active_provider: Some(ProviderId::Custom),
+            active_config_id: None,
+            providers: vec![custom],
+        };
+        merge_defaults(&mut settings);
+        let restored: AiSettings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        let verification = restored.providers[0].media_verification.as_ref().unwrap();
+        assert_eq!(verification.image_model, "my-image-model");
+        assert_eq!(verification.endpoint, "http://127.0.0.1:8000/v1");
     }
 }

@@ -4,8 +4,10 @@ import { forgetProject, loadProjects, rememberProject } from "../src/services/pr
 
 class MemoryStorage {
   values = new Map<string, string>();
+  get length() { return this.values.size; }
   getItem(key: string) { return this.values.get(key) ?? null; }
   setItem(key: string, value: string) { this.values.set(key, value); }
+  key(index: number) { return [...this.values.keys()][index] ?? null; }
 }
 
 function resetStorage() {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { archiveConversation, conversationMatches, duplicateConversation, isConversationBusy, pinConversation, renameConversation, shouldRequestApproval, sortConversations } from "../src/services/conversationActions.ts";
-import { createConversation, loadConversations, migrateConversation, saveConversations } from "../src/services/conversations.ts";
+import { createConversation, loadConversations, migrateConversation, referencedMediaUris, saveConversations } from "../src/services/conversations.ts";
 import type { Conversation } from "../src/types.ts";
 
 function conversation(id: string, overrides: Partial<Conversation> = {}): Conversation {
@@ -137,4 +137,33 @@ test("migra un chat general guardado antes dentro de un proyecto", () => {
   const migrated = loadConversations(null, "chat");
   assert.deepEqual(migrated.map((item) => item.id), ["general"]);
   assert.equal(migrated[0].projectPath, null);
+});
+
+test("el historial no aplica un límite artificial de conversaciones", () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    get length() { return store.size; },
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => store.set(key, value),
+    key: (index: number) => [...store.keys()][index] ?? null,
+  } });
+  const items = Array.from({ length: 125 }, (_, index) => conversation(`chat-${index}`));
+  assert.deepEqual(saveConversations("C:\\proyecto", items), { ok: true });
+  assert.equal(loadConversations("C:\\proyecto").length, 125);
+});
+
+test("la limpieza multimedia conserva las referencias guardadas en los chats", () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    get length() { return store.size; },
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => store.set(key, value),
+    key: (index: number) => [...store.keys()][index] ?? null,
+  } });
+  const item = conversation("media", { messages: [{
+    id: "m", role: "assistant", content: "Imagen creada", createdAt: 1,
+    generatedMedia: { id: "media", mediaType: "image", dataUrl: "asset://media", uri: "/data/vareliox/media/image.png", mimeType: "image/png", provider: "open_ai", model: "gpt-image-1", width: null, height: null, durationMs: null, seed: null },
+  }] });
+  saveConversations("C:\\proyecto", [item]);
+  assert.deepEqual(referencedMediaUris(), ["/data/vareliox/media/image.png"]);
 });

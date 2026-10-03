@@ -39,3 +39,56 @@ Paid API smoke tests must use a small prompt and a dedicated low-limit key. Neve
 - Verify version, icon, installer, uninstall entry, first launch, update check, links, license, and acknowledgements.
 - Scan the repository and installer with trusted security tools.
 - Confirm no API key, local path, private project content, or credential appears in source, logs, screenshots, or release assets.
+## Linux chat and managed media regression checks
+
+The browser-only fixture uses the production ChatPane and ApprovalPicker with
+mocked IPC. It cannot read desktop credentials or execute commands. Start the
+development server with `npm run dev`, then run:
+
+```bash
+python3 scripts/check-chat-webkit.py 'http://127.0.0.1:1420/tests/visual-chat.html?theme=dark' 1280 720
+python3 scripts/check-chat-webkit.py 'http://127.0.0.1:1420/tests/visual-chat.html?theme=light' 1366 768
+python3 scripts/check-chat-webkit.py 'http://127.0.0.1:1420/tests/visual-chat.html?theme=dark' 1920 1080
+python3 scripts/check-chat-webkit.py 'http://127.0.0.1:1420/tests/visual-chat.html?theme=light' 1280 720 - 1.25
+python3 scripts/check-chat-webkit.py 'http://127.0.0.1:1420/tests/visual-chat.html?theme=dark' 1280 720 - 1.5
+python3 scripts/check-chat-webkit.py 'http://127.0.0.1:1420/tests/visual-providers.html' 1280 720
+```
+
+These cases were verified on Linux WebKitGTK. They cover prompt visibility,
+1/5/12/30-line compositor growth, outside-click/Escape dismissal, keyboard
+permissions, the full-access warning shield, red Stop, cancellation recovery and
+separate chat/media models. Optional fourth argument saves an offscreen screenshot.
+The provider fixture also exercises Download -> model selection -> persistence,
+including preservation of a different active conversation provider.
+
+Real local image generation, text-to-video, image-to-video, runtime installation
+from verified downloads, spaced paths and cancellation were tested separately
+through the production Rust engine. See [LOCAL_MEDIA.md](LOCAL_MEDIA.md) for the
+opt-in hardware test, model licenses and current limits. LM Studio's default URL
+was checked against an installed LM Studio server on loopback port 1234.
+Windows and macOS visual behavior has not been verified by these Linux checks.
+
+### Media selection and model removal (2026-10-03)
+
+The production picker now separates conversation, image and video capabilities.
+The + tools can be selected before writing a prompt, including when no chat model
+is configured. Local media listing does not depend on the LM Studio/Ollama chat
+server. NVIDIA generation models use the adapter catalog, not its chat endpoint.
+
+`tests/visual-media.html` exercises these cases with mocked IPC, including rendering
+the successful result, preserving the chat model, and actionable missing-model errors.
+Use `?provider=lm_studio`, `?provider=ollama&mode=video`, `?provider=gemini&theme=light`,
+`?provider=open_ai`, or `?missing=true`. These are UI tests, not cloud API tests.
+The provider fixture additionally tests cancellation and confirmation of deletion,
+cleared media selection and preservation of an unrelated active cloud provider.
+No actual user model was deleted during testing.
+
+Run `bash scripts/test-visual-linux.sh` for the eight-case release regression suite.
+It starts and stops its own Vite server and uses Xvfb when available, or the current
+Linux display otherwise. The Linux release job runs this suite before uploading
+installers; failed UI checks prevent publication.
+
+Rust tests cover model path traversal, symlink rejection, unknown model IDs and
+shared diffusion weight retention. The opt-in hardware test was rerun successfully
+against the installed assets using a separate temporary installation: real image,
+image-to-video, cancellation and cleanup all passed. Outputs are separate QA files.

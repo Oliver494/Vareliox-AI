@@ -1,5 +1,7 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import type { AiChatEvent, AiSettings, ChatUpload, Diagnostic, ExternalFolderGrant, MediaGenerationResult, ProviderConfig, ProviderId, ProviderTestResult, ModelInfo, LocalModelCatalogItem, LocalModelDownloadEvent, WebSearchResult } from "../types";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import type { AiChatEvent, AiSettings, ChatUpload, Diagnostic, ExternalFolderGrant, MediaGenerationResult, MediaMode, MediaStorageStats, ProviderConfig, ProviderId, ProviderTestResult, ModelInfo, LocalModelCatalogItem, LocalModelDownloadEvent, WebSearchResult } from "../types";
+export { providerSupports } from "./providerCapabilities";
 
 export const providerMeta: Record<ProviderId, { name: string; type: "local" | "cloud"; defaultEndpoint: string; requiresKey: boolean }> = {
   ollama: { name: "Ollama", type: "local", defaultEndpoint: "http://127.0.0.1:11434", requiresKey: false },
@@ -23,13 +25,36 @@ export const activeProviderConfig = (settings: AiSettings | null | undefined) =>
     ?? null;
 };
 
+export const providerChatModel = (config: ProviderConfig | null | undefined) => config?.models?.chat || config?.model || "";
+export const providerMediaModel = (config: ProviderConfig | null | undefined, mode: MediaMode) => config?.models?.[mode] || "";
+export const withMigratedProviderModels = (config: ProviderConfig): ProviderConfig => ({
+  ...config,
+  model: config.models?.chat || config.model || "",
+  models: { chat: config.models?.chat || config.model || "", image: config.models?.image || "", video: config.models?.video || "" },
+  capabilities: config.capabilities?.length ? config.capabilities : ["chat"],
+});
+
+const migrateSettings = (settings: AiSettings): AiSettings => ({
+  ...settings,
+  providers: settings.providers.map(withMigratedProviderModels),
+});
+
 export const ai = {
-  settings: (projectPath: string | null) => invoke<AiSettings>("get_ai_settings", { projectPath }),
-  saveSettings: (projectPath: string | null, settings: AiSettings) => invoke<AiSettings>("save_ai_settings", { projectPath, settings }),
+  settings: (projectPath: string | null) => invoke<AiSettings>("get_ai_settings", { projectPath }).then(migrateSettings),
+  saveSettings: (projectPath: string | null, settings: AiSettings) => invoke<AiSettings>("save_ai_settings", { projectPath, settings: { ...settings, providers: settings.providers.map(withMigratedProviderModels) } }).then(migrateSettings),
   setKey: (config: ProviderConfig, projectPath: string | null, apiKey: string) => invoke<void>("set_provider_key", { provider: config.provider, configId: config.configId, projectPath, apiKey }),
   deleteKey: (config: ProviderConfig, projectPath: string | null) => invoke<void>("delete_provider_key", { provider: config.provider, configId: config.configId, projectPath }),
   models: (config: ProviderConfig, projectPath: string | null) => invoke<ModelInfo[]>("list_ai_models", { config, projectPath }),
   localCatalog: () => invoke<LocalModelCatalogItem[]>("list_local_model_catalog"),
+  localMediaModels: () => invoke<ModelInfo[]>("list_local_media_models"),
+  mediaModels: (config: ProviderConfig, mode: MediaMode, projectPath: string | null) => invoke<ModelInfo[]>("list_media_models", { config, mode, projectPath }),
+  installedLocalModels: (config: ProviderConfig) => invoke<import("../types").InstalledLocalModel[]>("list_installed_local_models", { config }),
+  removeLocalModel: (config: ProviderConfig, model: import("../types").InstalledLocalModel) => invoke<string[]>("remove_installed_local_model", { config, modelId: model.id, runtime: model.runtime }),
+  downloadLocalMediaModel: (modelId: string, requestId: string, onEvent: (event: LocalModelDownloadEvent) => void) => {
+    const channel = new Channel<LocalModelDownloadEvent>();
+    channel.onmessage = onEvent;
+    return invoke<void>("download_local_media_model", { modelId, requestId, onEvent: channel });
+  },
   downloadLocalModel: (config: ProviderConfig, modelId: string, onEvent: (event: LocalModelDownloadEvent) => void) => {
     const channel = new Channel<LocalModelDownloadEvent>();
     channel.onmessage = onEvent;
@@ -42,7 +67,23 @@ export const ai = {
   },
   openComfyUi: () => invoke<void>("open_comfyui_desktop"),
   test: (config: ProviderConfig, projectPath: string | null) => invoke<ProviderTestResult>("test_ai_provider", { config, projectPath }),
-  generateNvidiaMedia: (request: { requestId: string; config: ProviderConfig; mode: "image" | "video"; model: string; prompt: string; imageData?: string | null }) => invoke<MediaGenerationResult>("generate_nvidia_media", { request }),
+  startLmStudio: (endpoint: string) => invoke<void>("start_lm_studio_server", { endpoint }),
+  generateMedia: (request: { requestId: string; config: ProviderConfig; mode: MediaMode; model: string; prompt: string; imageData?: string | null }, projectPath: string | null, onProgress?: (event: LocalModelDownloadEvent) => void) => {
+    const channel = new Channel<LocalModelDownloadEvent>();
+    channel.onmessage = onProgress ?? (() => {});
+    return invoke<MediaGenerationResult>("generate_media", { request, projectPath, onEvent: channel }).then((result) => result.uri ? { ...result, dataUrl: convertFileSrc(result.uri) } : result);
+  },
+  persistLegacyMedia: (media: MediaGenerationResult) => invoke<string>("persist_legacy_media", { id: media.id, mimeType: media.mimeType, dataUrl: media.dataUrl }).then((uri) => ({ ...media, uri, dataUrl: convertFileSrc(uri) })),
+  saveMediaToProject: (media: MediaGenerationResult, projectPath: string, relativePath: string) => invoke<string>("save_media_to_project", { sourceUri: media.uri, dataUrl: media.dataUrl, projectPath, relativePath }),
+  exportMedia: async (media: MediaGenerationResult) => {
+    const extension = media.mimeType === "image/jpeg" ? "jpg" : media.mimeType === "image/webp" ? "webp" : media.mimeType === "video/webm" ? "webm" : media.mediaType === "video" ? "mp4" : "png";
+    const destination = await save({ title: "Descargar creación de Vareliox", defaultPath: `vareliox-${media.mediaType}-${media.id.slice(0, 8)}.${extension}`, filters: [{ name: media.mediaType === "image" ? "Imagen" : "Vídeo", extensions: [extension] }] });
+    if (!destination) return false;
+    await invoke<void>("export_media", { sourceUri: media.uri, dataUrl: media.uri ? "" : media.dataUrl, destination });
+    return true;
+  },
+  mediaStorageStats: () => invoke<MediaStorageStats>("media_storage_stats"),
+  cleanupOrphanedMedia: (keepUris: string[]) => invoke<MediaStorageStats>("cleanup_orphaned_media", { keepUris }),
   searchWeb: (query: string) => invoke<WebSearchResult>("search_web", { request: { query, maxResults: 4 } }),
   cancel: (requestId: string) => invoke<boolean>("cancel_ai_chat", { requestId }),
   chat: (request: { requestId: string; projectPath: string | null; config: ProviderConfig; messages: { role: "system" | "user" | "assistant"; content: string }[]; attachments: string[]; uploads: Pick<ChatUpload, "name" | "mimeType" | "kind" | "data">[]; externalFolders: ExternalFolderGrant[]; workspaceAccess: boolean; canEdit: boolean; codeMode: boolean; terminalAccess?: "disabled" | "project" | "shell" | "admin"; terminalShell?: "automatic" | "cmd" | "powershell" | "bash" | "zsh" }, onEvent: (event: AiChatEvent) => void) => {

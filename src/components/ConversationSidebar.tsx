@@ -1,4 +1,4 @@
-import { AlertCircle, Archive, Check, FolderClosed, FolderPlus, LoaderCircle, MessageSquarePlus, Pin, Plus, Search, ShieldQuestion, X } from "lucide-react";
+import { AlertCircle, Archive, Bot, Check, Code2, Files, FolderClosed, FolderPlus, LoaderCircle, MessageSquarePlus, MessagesSquare, Pin, Plus, Search, Settings2, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { conversationMatches, sortConversations } from "../services/conversationActions";
 import { usePreferences } from "../services/preferences";
@@ -23,11 +23,15 @@ type Props = {
   onNew: () => void;
   onAction: (id: string, action: ConversationMenuAction, value?: string) => void;
   isBusy: (conversation: Conversation) => boolean;
+  onWorkspaceChange: (mode: "chat" | "code") => void;
+  onOpenExplorer: () => void;
+  onOpenPreferences: () => void;
+  onClose: () => void;
 };
 
 type DialogState = { kind: "rename" | "delete" | "clear"; conversation: Conversation } | null;
 
-export function ConversationSidebar({ mode, interactive, open, projectName, projectPath, projects, conversations, activeId, generatingConversationId, persistenceError, onAddProject, onSelectProject, onSelect, onNew, onAction, isBusy }: Props) {
+export function ConversationSidebar({ mode, interactive, open, projectName, projectPath, projects, conversations, activeId, generatingConversationId, persistenceError, onAddProject, onSelectProject, onSelect, onNew, onAction, isBusy, onWorkspaceChange, onOpenExplorer, onOpenPreferences, onClose }: Props) {
   const { t } = usePreferences();
   const [archivedView, setArchivedView] = useState(false);
   const [query, setQuery] = useState("");
@@ -72,7 +76,9 @@ export function ConversationSidebar({ mode, interactive, open, projectName, proj
     <ConversationMenu conversation={item} open={menuId === item.id} onOpen={() => setMenuId(item.id)} onClose={() => setMenuId(null)} onAction={(action) => requestAction(item, action)} />
   </div>;
 
-  return <aside className={`thread-sidebar thread-sidebar--${mode} ${open ? "" : "thread-sidebar--closed"}`}>
+  return <aside className={`thread-sidebar thread-sidebar--${mode} ${open ? "" : "thread-sidebar--closed"}`} inert={!open} aria-hidden={!open}>
+    <div className="unified-sidebar-head"><div className="unified-wordmark">V</div><div className="unified-workspace-switcher"><button className={mode === "chat" ? "is-active" : ""} onClick={() => onWorkspaceChange("chat")}><Bot size={16} /><span>Chat</span></button><button className={mode === "code" ? "is-active" : ""} onClick={() => onWorkspaceChange("code")}><Code2 size={16} /><span>Code</span></button></div><button type="button" className="unified-sidebar-close" onClick={onClose} title={t("Ocultar barra lateral", "Hide sidebar")} aria-label={t("Ocultar barra lateral", "Hide sidebar")}><X size={17} /></button></div>
+    {mode === "code" && <div className="sidebar-mode-tabs" role="tablist"><button role="tab" aria-selected="true"><MessagesSquare size={16} />{t("Chats", "Chats")}</button><button role="tab" aria-selected="false" onClick={onOpenExplorer}><Files size={16} />{t("Explorador", "Explorer")}</button></div>}
     <header><strong>{archivedView ? t("Archivados", "Archived") : t("Chats", "Chats")}</strong><div><button onClick={() => setArchivedView((value) => !value)} title={archivedView ? t("Volver a chats", "Back to chats") : t("Ver archivados", "View archived")} aria-label={archivedView ? t("Volver a chats", "Back to chats") : t("Ver archivados", "View archived")}>{archivedView ? <MessageSquarePlus size={15} /> : <Archive size={14} />}</button><button onClick={() => { setArchivedView(false); onNew(); }} title={`${t("Nueva conversación", "New conversation")} (Ctrl+N)`} aria-label={t("Nueva conversación", "New conversation")}><Plus size={15} /></button></div></header>
     <div className="thread-projects">
       <div className="thread-projects__heading"><span>{t("Proyectos", "Projects")}</span><button type="button" onClick={onAddProject} title={t("Nuevo proyecto", "New project")} aria-label={t("Nuevo proyecto", "New project")}><FolderPlus size={15} /></button></div>
@@ -86,6 +92,7 @@ export function ConversationSidebar({ mode, interactive, open, projectName, proj
       {!visible.length && <div className="conversation-empty"><Search size={16} /><span>{query ? t("No hay resultados", "No results") : archivedView ? t("No hay chats archivados", "No archived chats") : t("No hay conversaciones", "No conversations")}</span></div>}
     </div>
     {persistenceError && <div className="conversation-persistence-error" role="alert"><AlertCircle size={13} /><span>{persistenceError}</span></div>}
+    <footer className="unified-sidebar-footer"><button onClick={onOpenPreferences}><Settings2 size={17} />{t("Ajustes", "Settings")}</button></footer>
     {dialog && <ConversationDialog kind={dialog.kind} conversation={dialog.conversation} projectName={projectName} busy={isBusy(dialog.conversation)} onClose={() => setDialog(null)} onConfirm={(value) => { onAction(dialog.conversation.id, dialog.kind, value); setDialog(null); }} />}
   </aside>;
 }

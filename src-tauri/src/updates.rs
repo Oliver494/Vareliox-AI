@@ -3,6 +3,7 @@ use reqwest::{redirect::Policy, Client, StatusCode};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::{fs::File, io::Write, process::Command};
 use tauri::AppHandle;
 use url::Url;
@@ -12,6 +13,7 @@ const RELEASES_API: &str =
 const RELEASE_PATH_PREFIX: &str = "/oliver494/vareliox-ai/releases/";
 const DOWNLOAD_PATH_PREFIX: &str = "/oliver494/vareliox-ai/releases/download/";
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const MAX_INSTALLER_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Deserialize)]

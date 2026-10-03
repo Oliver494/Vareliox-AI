@@ -26,7 +26,11 @@ export type Notice = {
 };
 
 export type ProviderId = "ollama" | "lm_studio" | "open_ai" | "anthropic" | "gemini" | "nvidia" | "zai" | "kimi" | "custom";
+export type InstalledLocalModel = { id: string; name: string; runtime: "vareliox" | "ollama" | "lm_studio" };
 export type ReasoningEffort = "low" | "medium" | "high";
+export type ModelCapability = "chat" | "image" | "video" | "vision" | "code";
+export type ProviderModels = { chat: string; image: string; video: string };
+export type MediaVerification = { endpoint: string; imageModel: string };
 
 export type ProviderConfig = {
   configId: string;
@@ -34,7 +38,12 @@ export type ProviderConfig = {
   displayName: string;
   logoDataUrl: string | null;
   endpoint: string;
+  /** Legacy transport alias. New UI reads and writes models.chat. */
   model: string;
+  models: ProviderModels;
+  capabilities: ModelCapability[];
+  /** A successful explicit generation test for this exact custom endpoint and image model. */
+  mediaVerification?: MediaVerification | null;
   reasoningEffort: ReasoningEffort;
   connectTimeoutSecs: number;
   firstResponseTimeoutSecs: number;
@@ -54,6 +63,7 @@ export type ModelInfo = {
   name: string;
   loaded: boolean | null;
   contextWindow: number | null;
+  capabilities: ModelCapability[];
 };
 
 export type LocalModelCatalogItem = {
@@ -150,10 +160,24 @@ export type Conversation = {
 };
 
 export type ConversationMode = "chat" | "code";
-export type AssistantWorkspace = ConversationMode | "media";
+export type AssistantWorkspace = ConversationMode;
 
 export type MediaMode = "image" | "video";
-export type MediaGenerationResult = { mediaType: MediaMode; dataUrl: string; seed: number | null };
+export type MediaGenerationResult = {
+  id: string;
+  mediaType: MediaMode;
+  dataUrl: string;
+  uri: string | null;
+  mimeType: string;
+  provider: ProviderId;
+  model: string;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+  seed: number | null;
+  elapsedMs?: number;
+};
+export type MediaStorageStats = { files: number; bytes: number };
 
 export type AgentState = "idle" | "analyzing" | "planning" | "awaiting_approval" | "executing" | "testing" | "correcting" | "completed" | "cancelled" | "failed" | "interrupted";
 export type AgentStep = { id: string; label: string; status: "pending" | "in_progress" | "completed" | "failed"; detail?: string };

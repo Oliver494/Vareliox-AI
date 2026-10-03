@@ -1,10 +1,11 @@
 import {
-  AlertCircle, Bot, Check, ChevronDown, Clipboard, Code2, Edit3, ExternalLink, FileCode2, FolderPlus, Globe2, ShieldCheck,
-  Image, LoaderCircle, Plus, RotateCcw, Send, Settings2, Sparkles, Square, Terminal,
+  AlertCircle, Bot, Check, ChevronDown, Clipboard, Code2, Edit3, ExternalLink, FileCode2, FolderPlus, Globe2,
+  Image, ImagePlus, LoaderCircle, Plus, RotateCcw, Send, Settings2, Square, Terminal, Video,
   Upload, X,
 } from "lucide-react";
-import { Fragment, type ClipboardEvent as ReactClipboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { activeProviderConfig, ai, asDiagnostic, providerDisplayName, providerMeta } from "../services/ai";
+import { Fragment, type ClipboardEvent as ReactClipboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { activeProviderConfig, ai, asDiagnostic, providerChatModel, providerDisplayName, providerMediaModel, providerMeta } from "../services/ai";
+import { availableMediaProviders, selectMediaProvider } from "../services/providerCapabilities";
 import { agent } from "../services/agent";
 import { requestsProjectAction } from "../services/actionIntent";
 import { actionRepairPrompt, canUseCodeBlockAsWrite, proposedActions, validActions } from "../services/actionProtocol";
@@ -12,11 +13,13 @@ import { ensureNodeProjectActions, normalizeCreatedFolderContents, requestedFile
 import { createConversation, loadConversations, saveConversations } from "../services/conversations";
 import { archiveConversation, conversationMarkdown, duplicateConversation, isConversationBusy, pinConversation, renameConversation, shouldRequestApproval, sortConversations } from "../services/conversationActions";
 import { chooseChatFiles, chooseExternalFolder, errorMessage, projectFiles } from "../services/fileSystem";
+import { requestedMediaMode } from "../services/mediaIntent";
 import { usePreferences } from "../services/preferences";
 import { computerAccess, useNovaPermissions } from "../services/permissions";
 import { normalizeTerminalAction, packageInstallActionForPrompt, systemInfoActionForPrompt, terminalActionLabel } from "../services/terminalAgent";
-import type { AgentCommandEvent, AgentTask, AiProjectAction, AiSettings, AiTerminalAction, AppliedChange, ChatMessage, ChatUpload, ContextReference, Conversation, ConversationMode, DetectedCommand, Diagnostic, ExternalFolderGrant, OpenFile, ProjectInfo, ProviderConfig, WebSearchSource } from "../types";
+import type { AgentCommandEvent, AgentTask, AiProjectAction, AiSettings, AiTerminalAction, AppliedChange, ChatMessage, ChatUpload, ContextReference, Conversation, ConversationMode, DetectedCommand, Diagnostic, ExternalFolderGrant, MediaGenerationResult, MediaMode, OpenFile, ProjectInfo, ProviderConfig, WebSearchSource } from "../types";
 import { AgentTaskCard } from "./AgentTaskCard";
+import { ApprovalPicker } from "./ApprovalPicker";
 import { AssistantMessageContent } from "./AssistantMessageContent";
 import { DiagnosticCard } from "./DiagnosticCard";
 import { ChatModelPicker } from "./ChatModelPicker";
@@ -42,6 +45,10 @@ type Props = {
   onSettingsChange: (settings: AiSettings) => void;
   onFilesChanged: (paths: string[]) => Promise<void>;
   onNotify: (tone: "success" | "error" | "info", message: string) => void;
+  onWorkspaceChange: (mode: "chat" | "code") => void;
+  onOpenExplorer: () => void;
+  onOpenPreferences: () => void;
+  onCloseSidebar: () => void;
 };
 
 function visibleAnswer(content: string) {
@@ -140,6 +147,14 @@ function message(role: ChatMessage["role"], content: string, uploads?: ChatMessa
   return { id: crypto.randomUUID(), role, content, createdAt: Date.now(), uploads, contextReferences };
 }
 
+function readDrafts(key: string): Record<string, string> {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(key) || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+    return Object.fromEntries(Object.entries(saved).filter(([id, draft]) => id.length < 100 && typeof draft === "string" && draft.length < 200_000)) as Record<string, string>;
+  } catch { return {}; }
+}
+
 const SLASH_COMMANDS = [
   { command: "/new", label: ["Nueva conversación", "New conversation"], description: ["Abre un chat nuevo", "Open a new chat"] },
   { command: "/clear", label: ["Limpiar chat", "Clear chat"], description: ["Borra los mensajes de este chat", "Delete the messages in this chat"] },
@@ -150,15 +165,25 @@ const SLASH_COMMANDS = [
   { command: "/help", label: ["Ver comandos", "View commands"], description: ["Muestra la ayuda rápida", "Show quick help"] },
 ];
 
-export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, settings, sidebarOpen, onAddProject, onSelectProject, onConfigure, onSettingsChange, onFilesChanged, onNotify }: Props) {
+export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, settings, sidebarOpen, onAddProject, onSelectProject, onConfigure, onSettingsChange, onFilesChanged, onNotify, onWorkspaceChange, onOpenExplorer, onOpenPreferences, onCloseSidebar }: Props) {
   const { t } = usePreferences();
   const { permissions } = useNovaPermissions();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState("");
-  const [input, setInput] = useState("");
+  const draftKey = `vareliox:drafts:v1:${mode}:${encodeURIComponent(mode === "code" ? project?.path ?? "" : "global")}`;
+  const [draftState, setDraftState] = useState(() => ({ key: draftKey, values: readDrafts(draftKey) }));
+  const draftValues = draftState.key === draftKey ? draftState.values : readDrafts(draftKey);
+  const input = draftValues[activeId] ?? "";
+  const setInput = (value: string) => setDraftState((current) => {
+    const values = current.key === draftKey ? current.values : readDrafts(draftKey);
+    return { key: draftKey, values: { ...values, [activeId]: value } };
+  });
   const [projectAttachments, setProjectAttachments] = useState<string[]>([]);
   const [uploads, setUploads] = useState<ChatUpload[]>([]);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
+  const [mediaTools, setMediaTools] = useState<Record<string, { mode: "chat" | MediaMode; configId?: string }>>({});
+  const attachmentMenuRef = useRef<HTMLDivElement>(null);
+  const attachmentButtonRef = useRef<HTMLButtonElement>(null);
   const [generating, setGenerating] = useState(false);
   const webRequest = useRef<string | null>(null);
   const [generatingConversationId, setGeneratingConversationId] = useState<string | null>(null);
@@ -171,7 +196,6 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
   const [preview, setPreview] = useState<PreviewAction[]>([]);
   const [applying, setApplying] = useState(false);
   const [detectedCommands, setDetectedCommands] = useState<DetectedCommand[]>([]);
-  const [modePickerOpen, setModePickerOpen] = useState(false);
   const [pendingCommand, setPendingCommand] = useState<PendingDetectedCommand | null>(null);
   const [pendingTerminal, setPendingTerminal] = useState<PendingTerminal | null>(null);
   const [commandBusy, setCommandBusy] = useState(false);
@@ -183,16 +207,25 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
   const agentRequestId = useRef<string | null>(null);
   const requestId = useRef<string | null>(null);
   const mediaRequestId = useRef<string | null>(null);
+  const mediaRetryByConversation = useRef(new Map<string, { mode: MediaMode; prompt: string; uploads: ChatUpload[]; configId: string }>());
   const userStoppedRequests = useRef(new Set<string>());
   const lastPrompt = useRef("");
   const assistantBuffer = useRef("");
   const skipPersistence = useRef(false);
   const previewOwner = useRef<{ conversationId: string; messageId: string } | null>(null);
   const previewAfterApply = useRef<(() => Promise<void>) | null>(null);
-  const modePickerRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const active = activeProviderConfig(settings);
-  const ready = !!active?.model && (!providerMeta[active.provider].requiresKey || active.apiKeyConfigured);
+  const ready = !!providerChatModel(active) && (!active || !providerMeta[active.provider].requiresKey || active.apiKeyConfigured);
+  const mediaReady = !!settings && (availableMediaProviders(settings.providers, "image").length > 0 || availableMediaProviders(settings.providers, "video").length > 0);
   const conversation = conversations.find((item) => item.id === activeId) ?? conversations[0];
+  const mediaTool = mediaTools[conversation?.id ?? ""] ?? { mode: "chat" as const };
+  function chooseTool(tool: "chat" | MediaMode, focus = true) {
+    if (!conversation) return;
+    setMediaTools((current) => ({ ...current, [conversation.id]: { mode: tool } }));
+    setAttachmentOpen(false);
+    if (focus) requestAnimationFrame(() => composerRef.current?.focus());
+  }
   const diagnostic = conversation ? diagnostics[conversation.id] ?? null : null;
   function setDiagnostic(value: Diagnostic | null) {
     if (conversation) setDiagnostics((current) => ({ ...current, [conversation.id]: value }));
@@ -204,10 +237,49 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
   const generatingHere = generating && generatingConversationId === conversation?.id;
   const generatingElsewhere = generating && !!conversation && generatingConversationId !== conversation.id;
   const codeMode = mode === "code";
-  const modeSwitchDisabled = true;
   const availableCommands = codeMode ? SLASH_COMMANDS : SLASH_COMMANDS.filter((item) => !["/test", "/build", "/check"].includes(item.command));
   const commandSuggestions = input.trimStart().startsWith("/") ? availableCommands.filter((item) => item.command.startsWith(input.trimStart().toLocaleLowerCase())) : [];
   const lastMessageContent = conversation?.messages[conversation.messages.length - 1]?.content ?? "";
+
+  useEffect(() => {
+    if (draftState.key !== draftKey) setDraftState({ key: draftKey, values: readDrafts(draftKey) });
+  }, [draftKey, draftState.key]);
+
+  useEffect(() => {
+    if (draftState.key !== draftKey) return;
+    try { localStorage.setItem(draftKey, JSON.stringify(draftState.values)); }
+    catch { /* A full storage surface must not interrupt the active chat. */ }
+  }, [draftKey, draftState]);
+
+  useEffect(() => {
+    if (!attachmentOpen) return;
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      if (!attachmentMenuRef.current?.contains(target) && !attachmentButtonRef.current?.contains(target)) setAttachmentOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { setAttachmentOpen(false); attachmentButtonRef.current?.focus(); }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("pointerdown", onPointerDown); document.removeEventListener("keydown", onKeyDown); };
+  }, [attachmentOpen]);
+
+  useLayoutEffect(() => {
+    const textarea = composerRef.current;
+    if (!textarea) return;
+    const resize = () => {
+      textarea.style.height = "auto";
+      const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight) || 24;
+      const maxHeight = Math.min(lineHeight * 12 + 24, window.innerHeight * 0.4);
+      const next = Math.min(textarea.scrollHeight, maxHeight);
+      textarea.style.height = `${Math.max(lineHeight * 2 + 24, next)}px`;
+      textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [input]);
 
   function scrollToBottom(behavior: ScrollBehavior = "smooth") {
     const node = messagesRef.current;
@@ -249,13 +321,36 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
     skipPersistence.current = true;
     setConversations(initial);
     setActiveId(initial[0].id);
-    setInput(""); setUploads([]); setProjectAttachments([]); setPreview([]); setDiagnostic(null);
+    setUploads([]); setProjectAttachments([]); setPreview([]); setDiagnostic(null);
     setGeneratingConversationId(null); setPendingTerminal(null); setPendingCommand(null);
+    // Older versions stored complete base64 payloads in localStorage. Move them
+    // to Vareliox's media directory when their conversation is opened, while
+    // keeping the original entry untouched if one file cannot be migrated.
+    const legacyMedia = initial.flatMap((item) => item.messages
+      .filter((entry) => entry.generatedMedia && !entry.generatedMedia.uri && entry.generatedMedia.dataUrl.startsWith("data:"))
+      .map((entry) => entry.generatedMedia!));
+    if (legacyMedia.length) {
+      let cancelled = false;
+      void Promise.all(legacyMedia.map(async (media) => {
+        try { return await ai.persistLegacyMedia(media); }
+        catch { return media; }
+      })).then((migrated) => {
+        if (cancelled) return;
+        const byId = new Map(migrated.map((media) => [media.id, media]));
+        setConversations((items) => items.map((item) => ({
+          ...item,
+          messages: item.messages.map((entry) => entry.generatedMedia && byId.has(entry.generatedMedia.id)
+            ? { ...entry, generatedMedia: byId.get(entry.generatedMedia.id) }
+            : entry),
+        })));
+      });
+      return () => { cancelled = true; };
+    }
   }, [codeMode, mode, project?.path]);
 
   useEffect(() => {
     // El estado visual de una petición pertenece únicamente al chat que la inició.
-    setInput(""); setUploads([]); setProjectAttachments([]); setAttachmentOpen(false); setPreview([]); setDiagnostic(null);
+    setUploads([]); setProjectAttachments([]); setAttachmentOpen(false); setPreview([]); setDiagnostic(null);
     const selected = conversations.find((item) => item.id === activeId);
     if (selected?.lastError) {
       lastPrompt.current = [...selected.messages].reverse().find((item) => item.role === "user")?.content ?? "";
@@ -295,14 +390,9 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
     setConversations((items) => items.map((item) => item.id === id ? updater(item) : item));
   }
 
-  function changeAssistantMode(_nextMode: Conversation["assistantMode"]) {
-    // Product workspaces are selected globally; conversations cannot cross them.
-    setModePickerOpen(false);
-  }
-
   function newConversation() {
     const created = createConversation(codeMode ? project?.path ?? null : null, mode);
-    setConversations((items) => [created, ...items]); setActiveId(created.id); setInput(""); setPreview([]); setDiagnostic(null);
+    setConversations((items) => [created, ...items]); setActiveId(created.id); setPreview([]); setDiagnostic(null);
   }
 
   function addLocalMessage(content: string) {
@@ -343,7 +433,7 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
 
   function runCommand(value: string) {
     const command = value.trim().toLocaleLowerCase().replace(/^\/\s+/, "/").split(/\s+/)[0];
-    if (command === "/new") { newConversation(); return true; }
+    if (command === "/new") { setInput(""); newConversation(); return true; }
     if (command === "/clear") {
       if (conversation) setClearRequestedId(conversation.id);
       return true;
@@ -793,7 +883,10 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
     // available again.
     if (generating || webRequest.current) return;
     if (!forcedPrompt && runCommand(prompt)) return;
+    const mediaMode = !forcedPrompt ? (mediaTool.mode !== "chat" ? mediaTool.mode : requestedMediaMode(prompt)) : null;
+    if (mediaMode) { await createMediaInChat(mediaMode); return; }
     if (!active || !ready) return;
+    mediaRetryByConversation.current.delete(conversation.id);
     // La solicitud conserva una copia del proveedor y del proyecto al enviarse.
     // Cambiar de vista, conversación o modelo solo afecta a la siguiente solicitud.
     followMessages.current = true;
@@ -993,40 +1086,80 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
     finally { window.clearInterval(timer); if (requestId.current) userStoppedRequests.current.delete(requestId.current); setGenerating(false); setGeneratingConversationId(null); requestId.current = null; setUploads([]); setProjectAttachments([]); }
   }
 
-  async function createImageInChat() {
-    const prompt = input.trim();
-    const nvidia = settings?.providers.find((item) => item.provider === "nvidia");
+  async function createMediaInChat(mode: MediaMode, retryPrompt?: string) {
+    const prompt = (retryPrompt ?? input).trim();
+    const preferred = retryPrompt === undefined ? mediaTool.configId : mediaRetryByConversation.current.get(conversation?.id ?? "")?.configId;
+    const mediaProvider = selectMediaProvider(settings?.providers ?? [], mode, active?.configId, preferred);
     if (!conversation || !prompt) {
-      setDiagnostic({ code: "EMPTY_PROMPT", title: "Describe la imagen", explanation: "Escribe lo que quieres crear antes de pulsar el botón de imagen.", cause: "Falta la descripción para el modelo de imagen.", action: "Describe una imagen y vuelve a intentarlo.", technicalDetails: null, retryable: false });
+      setDiagnostic({ code: "EMPTY_PROMPT", title: mode === "image" ? "Describe la imagen" : "Describe el vídeo", explanation: "Escribe lo que quieres crear antes de elegir la herramienta.", cause: "Falta una descripción para el modelo multimedia.", action: "Añade una descripción y vuelve a intentarlo.", technicalDetails: null, retryable: false });
       return;
     }
-    if (!nvidia?.apiKeyConfigured) {
-      setDiagnostic({ code: "INVALID_API_KEY", title: "Configura NVIDIA API", explanation: "Crear imágenes en Vareliox Chat utiliza tu clave de NVIDIA API.", cause: "NVIDIA API no tiene una clave guardada.", action: "Abre Proveedores y configura NVIDIA API.", technicalDetails: null, retryable: false });
+    if (!mediaProvider) {
+      setDiagnostic({ code: "MEDIA_PROVIDER_MISSING", title: "Configura un modelo multimedia", explanation: `No hay un modelo de ${mode === "image" ? "imagen" : "vídeo"} listo para usar.`, cause: "Ningún proveedor configurado declara esta capacidad.", action: "Abre Proveedores y asigna un modelo para esta capacidad.", technicalDetails: null, retryable: false });
+      return;
+    }
+    const requestUploads = retryPrompt === undefined ? uploads : mediaRetryByConversation.current.get(conversation.id)?.uploads ?? [];
+    const sourceImage = requestUploads.find((item) => item.kind === "image");
+    if (mode === "video" && mediaProvider.provider === "nvidia" && !sourceImage) {
+      setDiagnostic({ code: "IMAGE_REQUIRED", title: "Adjunta una imagen", explanation: "La generación de vídeo configurada necesita una imagen inicial.", cause: "No hay una imagen adjunta al mensaje.", action: "Pulsa +, adjunta una imagen y vuelve a intentarlo.", technicalDetails: null, retryable: false });
       return;
     }
     if (generating) return;
-    const userMessage = message("user", prompt);
-    const assistantMessage = message("assistant", "Creando imagen…");
+    const uploadedMeta = requestUploads.map(({ data: _data, ...item }) => item);
+    const userMessage = message("user", prompt, uploadedMeta);
+    const assistantMessage = message("assistant", "");
     const conversationId = conversation.id;
     updateConversationById(conversationId, (item) => ({ ...item, messages: [...item.messages, userMessage, assistantMessage], lastError: false, updatedAt: Date.now() }));
     const requestId = crypto.randomUUID();
     mediaRequestId.current = requestId;
-    setInput(""); setDiagnostic(null); setGenerating(true); setGeneratingConversationId(conversationId); setStatus("Creando imagen con NVIDIA…");
+    mediaRetryByConversation.current.set(conversationId, { mode, prompt, uploads: requestUploads, configId: mediaProvider.configId });
+    const startedAt = performance.now();
+    const timer = window.setInterval(() => setWaitMs(performance.now() - startedAt), 100);
+    if (retryPrompt === undefined) setInput("");
+    setWaitMs(0); setDiagnostic(null); setGenerating(true); setGeneratingConversationId(conversationId);
+    setStatus(`${mode === "image" ? t("Imagen", "Image") : t("Vídeo", "Video")} · ${t("Procesando…", "Processing…")} · ${providerDisplayName(mediaProvider)} · ${providerMediaModel(mediaProvider, mode)}`);
     try {
-      const generated = await ai.generateNvidiaMedia({ requestId, config: nvidia, mode: "image", model: "black-forest-labs/flux.1-schnell", prompt });
-      updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: "Imagen creada.", generatedMedia: generated } : entry), updatedAt: Date.now() }));
-      setStatus("Imagen creada");
+      const generated = await ai.generateMedia({ requestId, config: mediaProvider, mode, model: providerMediaModel(mediaProvider, mode), prompt, imageData: sourceImage ? `data:${sourceImage.mimeType};base64,${sourceImage.data}` : null }, codeMode ? project?.path ?? null : null, (event) => {
+        if (event.type === "status" && mediaRequestId.current === requestId) setStatus(`${event.message}${event.progress === null ? "" : ` · ${event.progress}%`}`);
+      });
+      updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: mode === "image" ? t("Imagen creada", "Image created") : t("Vídeo creado", "Video created"), generatedMedia: { ...generated, elapsedMs: Math.round(performance.now() - startedAt) } } : entry), updatedAt: Date.now() }));
+      setStatus(mode === "image" ? "Imagen creada" : "Vídeo creado");
+      mediaRetryByConversation.current.delete(conversationId);
     } catch (cause) {
-      setDiagnostic(asDiagnostic(cause));
-      updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: "No se pudo crear la imagen." } : entry), lastError: true, updatedAt: Date.now() }));
-    } finally { if (mediaRequestId.current === requestId) mediaRequestId.current = null; setGenerating(false); setGeneratingConversationId(null); }
+      const failure = asDiagnostic(cause);
+      const cancelled = failure.code === "CANCELLED";
+      setDiagnostic(cancelled ? null : failure);
+      updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: cancelled ? t("Creación cancelada", "Creation cancelled") : `No se pudo crear ${mode === "image" ? "la imagen" : "el vídeo"}.` } : entry), lastError: !cancelled, updatedAt: Date.now() }));
+    } finally { window.clearInterval(timer); if (mediaRequestId.current === requestId) mediaRequestId.current = null; setGenerating(false); setGeneratingConversationId(null); if (retryPrompt === undefined) setUploads([]); }
+  }
+
+  async function saveGeneratedMedia(media: MediaGenerationResult, relativePath: string) {
+    if (!project) throw new Error(t("Abre un proyecto antes de guardar el archivo.", "Open a project before saving the file."));
+    try {
+      const savedPath = await ai.saveMediaToProject(media, project.path, relativePath);
+      await onFilesChanged([savedPath]);
+      onNotify("success", t("Archivo multimedia guardado en el proyecto", "Media file saved in the project"));
+    } catch (cause) {
+      throw new Error(asDiagnostic(cause).explanation);
+    }
+  }
+
+  async function downloadGeneratedMedia(media: MediaGenerationResult) {
+    try {
+      if (await ai.exportMedia(media)) onNotify("success", t("Archivo multimedia descargado", "Media file downloaded"));
+    } catch (cause) { throw new Error(asDiagnostic(cause).explanation); }
   }
 
   async function stop() {
     if (!generatingHere) return;
     if (webRequest.current) { webRequest.current = null; setGenerating(false); setGeneratingConversationId(null); return; }
     if (agentRequestId.current) { await stopAgentCommand(); return; }
-    if (mediaRequestId.current) { await ai.cancel(mediaRequestId.current); return; }
+    if (mediaRequestId.current) {
+      setStatus(t("Deteniendo generación…", "Stopping generation…"));
+      try { await ai.cancel(mediaRequestId.current); }
+      catch (cause) { setDiagnostic(asDiagnostic(cause)); }
+      return;
+    }
     const id = requestId.current;
     if (!id) return;
     userStoppedRequests.current.add(id);
@@ -1163,6 +1296,14 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
     setPreview([]);
   }
 
+  function promptBeforeMessage(index: number) {
+    if (!conversation) return "";
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (conversation.messages[cursor].role === "user") return conversation.messages[cursor].content;
+    }
+    return "";
+  }
+
   const visiblePendingTerminal = pendingTerminal?.conversationId === conversation?.id ? pendingTerminal : null;
   const visiblePendingCommand = pendingCommand && conversation && pendingCommand.conversationId === conversation.id ? pendingCommand : null;
   const pendingApproval = visiblePendingTerminal ? terminalCommandPreview(visiblePendingTerminal.action) : visiblePendingCommand?.command ?? null;
@@ -1179,36 +1320,13 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
   /> : null;
 
   return <section className="chat-layout">
-    <ConversationSidebar mode={mode} interactive={activeWorkspace} open={sidebarOpen} projectName={project?.name ?? t("Sin proyecto", "No project")} projectPath={project?.path ?? null} projects={projects} conversations={conversations} activeId={activeId} generatingConversationId={generatingConversationId} persistenceError={persistenceError} onAddProject={onAddProject} onSelectProject={onSelectProject} onSelect={setActiveId} onNew={newConversation} onAction={manageConversation} isBusy={(item) => isConversationBusy(item, generatingConversationId)} />
+    <ConversationSidebar mode={mode} interactive={activeWorkspace} open={sidebarOpen} projectName={project?.name ?? t("Sin proyecto", "No project")} projectPath={project?.path ?? null} projects={projects} conversations={conversations} activeId={activeId} generatingConversationId={generatingConversationId} persistenceError={persistenceError} onAddProject={onAddProject} onSelectProject={onSelectProject} onSelect={setActiveId} onNew={newConversation} onAction={manageConversation} isBusy={(item) => isConversationBusy(item, generatingConversationId)} onWorkspaceChange={onWorkspaceChange} onOpenExplorer={onOpenExplorer} onOpenPreferences={onOpenPreferences} onClose={onCloseSidebar} />
     <section className="chat-pane">
       <header className="chat-header">
-        <div className="chat-header__identity">
-          {conversation && <div className={`assistant-mode-picker${modePickerOpen ? " is-open" : ""}`} ref={modePickerRef}>
-            <button className="assistant-mode-trigger" type="button" onClick={() => setModePickerOpen((open) => !open)} disabled={modeSwitchDisabled} aria-haspopup="menu" aria-expanded={modePickerOpen} aria-label={t("Elegir modo del asistente", "Choose assistant mode")}>
-              <span className={`assistant-mode-icon assistant-mode-icon--${codeMode ? "code" : "chat"}`}>{codeMode ? <Code2 size={15} /> : <Bot size={15} />}</span>
-              <span><strong>{codeMode ? "Vareliox Code" : "Vareliox Chat"}</strong><small>{codeMode ? t("Agente de código", "Coding agent") : t("Chat con IA", "AI chat")}</small></span>
-              <ChevronDown size={14} />
-            </button>
-            {modePickerOpen && <div className="assistant-mode-menu" role="menu" aria-label={t("Elegir modo", "Choose mode")}>
-              <header><strong>{t("Elige cómo quieres trabajar", "Choose how you want to work")}</strong><span>{t("Puedes usar un modo diferente en cada chat.", "You can use a different mode in each chat.")}</span></header>
-              <button type="button" role="menuitemradio" aria-checked={!codeMode} className={!codeMode ? "is-selected" : ""} onClick={() => changeAssistantMode("chat")}>
-                <span className="assistant-mode-card-icon assistant-mode-card-icon--chat"><Bot size={19} /></span>
-                <span><strong>Vareliox Chat</strong><small>{t("Pregunta, aprende y genera contenido sin modificar archivos.", "Ask, learn, and generate content without changing files.")}</small></span>
-                {!codeMode && <Check size={16} />}
-              </button>
-              <button type="button" role="menuitemradio" aria-checked={codeMode} className={codeMode ? "is-selected" : ""} onClick={() => changeAssistantMode("code")} disabled={!project}>
-                <span className="assistant-mode-card-icon assistant-mode-card-icon--code"><Code2 size={19} /></span>
-                <span><strong>Vareliox Code</strong><small>{project ? t("Lee, crea y edita archivos dentro del proyecto abierto.", "Read, create, and edit files inside the open project.") : t("Abre un proyecto para activar el agente de código.", "Open a project to enable the coding agent.")}</small></span>
-                {codeMode && <Check size={16} />}
-              </button>
-              <footer><ShieldCheck size={13} /><span>{codeMode ? t("Los cambios respetan tus permisos y muestran un diff.", "Changes follow your permissions and show a diff.") : t("Vareliox Chat no recibe acceso automático al proyecto.", "Vareliox Chat does not receive automatic project access.")}</span></footer>
-            </div>}
-          </div>}
-          <div className="chat-provider"><span className={`provider-dot ${ready ? "is-ready" : ""}`} /><div><strong>{active ? providerDisplayName(active) : t("Sin proveedor", "No provider")}</strong><span>{active?.model || t("Configura un modelo", "Configure a model")}</span></div></div>
-        </div>
+        <div className="chat-header__identity"><div className="chat-provider"><span className={`provider-dot ${ready ? "is-ready" : ""}`} /><div><strong>{active ? providerDisplayName(active) : t("Sin proveedor", "No provider")}</strong><span>{active ? providerChatModel(active) : t("Configura un modelo", "Configure a model")}</span></div></div></div>
         <div className="chat-header__actions">
           {codeMode && project && <button className="icon-button terminal-launch-button" type="button" onClick={() => setTerminalOpen((open) => !open)} aria-pressed={terminalOpen} aria-label={t("Terminal", "Terminal")} title={t("Terminal", "Terminal")}><Terminal size={18} /></button>}
-          <div className="chat-connection">{ready ? <><Check size={13} />{t("Configurado", "Configured")}</> : <><AlertCircle size={13} />{t("Incompleto", "Incomplete")}</>}<button className="icon-button" onClick={onConfigure} title={t("Configurar proveedores", "Configure providers")}><Settings2 size={16} /></button></div>
+          <div className="chat-connection">{(mediaTool.mode === "chat" ? ready : availableMediaProviders(settings?.providers ?? [], mediaTool.mode).some((config) => !mediaTool.configId || config.configId === mediaTool.configId)) ? <><Check size={13} />{t("Configurado", "Configured")}</> : <><AlertCircle size={13} />{t("Incompleto", "Incomplete")}</>}<button className="icon-button" onClick={onConfigure} title={t("Configurar proveedores", "Configure providers")}><Settings2 size={16} /></button></div>
         </div>
       </header>
       <div className="chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
@@ -1218,7 +1336,7 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
           <article className={`chat-message chat-message--${item.role}`}>
             <span>{item.role === "user" ? t("Tú", "You") : codeMode ? "Vareliox Code" : "Vareliox Chat"}</span>
             <div className="message-body">
-            <div>{item.role === "assistant" ? <AssistantMessageContent content={displayedAssistantAnswer(item.content)} media={item.generatedMedia} /> : item.content}{!(item.role === "assistant" ? displayedAssistantAnswer(item.content) : item.content) && generatingHere && index === conversation.messages.length - 1 ? <span className="waiting-text" role="status" aria-live="polite"><LoaderCircle className="spin" size={14} />{status} {(waitMs / 1000).toFixed(1)} s</span> : null}</div>
+            <div>{item.role === "assistant" ? <AssistantMessageContent content={displayedAssistantAnswer(item.content)} media={item.generatedMedia} onDownload={item.generatedMedia ? () => downloadGeneratedMedia(item.generatedMedia!) : undefined} onRetry={item.generatedMedia?.mediaType === "image" && promptBeforeMessage(index) ? () => createMediaInChat("image", promptBeforeMessage(index)) : undefined} onSaveToProject={codeMode && project && item.generatedMedia ? (relativePath) => saveGeneratedMedia(item.generatedMedia!, relativePath) : undefined} /> : item.content}{!(item.role === "assistant" ? displayedAssistantAnswer(item.content) : item.content) && generatingHere && index === conversation.messages.length - 1 ? <span className="waiting-text" role="status" aria-live="polite"><LoaderCircle className="spin" size={14} />{status} {(waitMs / 1000).toFixed(1)} s</span> : null}</div>
             {!!item.uploads?.length && <div className="message-attachments">{item.uploads.map((file) => <span key={file.id}>{file.kind === "image" ? <Image size={12} /> : <FileCode2 size={12} />}{file.name}</span>)}</div>}
             {item.webSearchAttempted && <details className="message-web-sources"><summary><Globe2 size={12} />{item.webSources?.length ? `${item.webSources.length} fuentes web consultadas` : (item.webSearchError || "Búsqueda web sin fuentes disponibles")}</summary>{item.webSources?.length ? <div>{item.webSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><strong>{source.title}</strong>{source.snippet && <small>{source.snippet.slice(0, 350)}</small>}<ExternalLink size={11} /></a>)}</div> : null}</details>}
             {!!item.contextReferences?.length && <details className="message-context"><summary><FileCode2 size={12} />{item.contextReferences.length} {t("archivos usados como contexto", "files used as context")}</summary><div>{item.contextReferences.map((reference) => <button key={reference.path} type="button" title={reference.path}>{reference.path}:{reference.startLine}-{reference.endLine}{reference.truncated ? ` ${t("(truncado)", "(truncated)")}` : ""}</button>)}</div></details>}
@@ -1229,16 +1347,35 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
           </article>
         </Fragment>)}
         {agentTaskCard && !taskOwnerVisible && agentTaskCard}
-        {diagnostic && <DiagnosticCard diagnostic={diagnostic} onRetry={() => void send(lastPrompt.current)} />}
+        {diagnostic && <DiagnosticCard diagnostic={diagnostic} onRetry={() => { const media = conversation && mediaRetryByConversation.current.get(conversation.id); if (media) void createMediaInChat(media.mode, media.prompt); else void send(lastPrompt.current); }} />}
       </div>
       {showJumpToBottom && <button type="button" className="jump-to-bottom" onClick={() => scrollToBottom()} title={t("Ir al final", "Jump to bottom")} aria-label={t("Ir al final del chat", "Jump to the bottom of the chat")}><ChevronDown size={17} /></button>}
       <div className="chat-composer-wrap">
         {editingMessageId && <div className="editing-banner"><Edit3 size={12} />{t("Editando pregunta", "Editing question")}<button onClick={() => { setEditingMessageId(null); setInput(""); }}><X size={12} /></button></div>}
         {codeMode && conversation?.externalFolders.length ? <div className="attached-files external-folder-grants">{conversation.externalFolders.map((folder) => <span key={folder.id} title={folder.path}><FolderPlus size={12} />{folder.name} · {folder.access === "write" ? t("editar", "edit") : t("lectura", "read")}<button onClick={() => revokeExternalFolder(folder.id)} aria-label={`${t("Quitar", "Remove")} ${folder.name}`}><X size={12} /></button></span>)}</div> : null}
         {(projectAttachments.length > 0 || uploads.length > 0) && <div className="attached-files">{projectAttachments.map((path) => <span key={path}><FileCode2 size={12} />{path}<button onClick={() => toggleProjectAttachment(path)}><X size={12} /></button></span>)}{uploads.map((file) => <span key={file.id} title={file.name}>{file.kind === "image" ? <img className="attached-files__image" src={`data:${file.mimeType};base64,${file.data}`} alt={t("Imagen adjunta", "Attached image")} /> : <FileCode2 size={12} />}{file.name}<button onClick={() => setUploads((items) => items.filter((item) => item.id !== file.id))} aria-label={`${t("Quitar", "Remove")} ${file.name}`}><X size={12} /></button></span>)}</div>}
-        {attachmentOpen && <div className={`attachment-menu${codeMode && openFiles.length ? "" : " attachment-menu--compact"}`}><button className="attachment-menu__upload" onClick={() => void uploadFiles()}><Upload size={14} />{t("Subir archivo o imagen", "Upload file or image")}</button>{codeMode && project && <div className="external-folder-actions"><button type="button" onClick={() => void grantExternalFolder("read")}><FolderPlus size={14} />{t("Añadir carpeta de lectura", "Add read-only folder")}</button><button type="button" onClick={() => void grantExternalFolder("write")}><FolderPlus size={14} />{t("Añadir carpeta con edición", "Add editable folder")}</button></div>}{codeMode && openFiles.length > 0 && <div className="attachment-menu__files">{openFiles.map((file) => <label key={file.relativePath}><input type="checkbox" checked={projectAttachments.includes(file.relativePath)} onChange={() => toggleProjectAttachment(file.relativePath)} /><FileCode2 size={14} /><span>{file.relativePath}</span><small>{Math.ceil(file.content.length / 4).toLocaleString()} tokens</small></label>)}</div>}</div>}
+        {attachmentOpen && <div ref={attachmentMenuRef} className={`attachment-menu${codeMode && openFiles.length ? "" : " attachment-menu--compact"}`}>
+          <div className="attachment-menu__tools">
+            <button type="button" onClick={() => chooseTool("image")}><ImagePlus size={16} /><span><strong>{t("Crear imagen", "Create image")}</strong><small>{t("Usar el modelo de imagen configurado", "Use the configured image model")}</small></span></button>
+            <button type="button" onClick={() => chooseTool("video")}><Video size={16} /><span><strong>{t("Crear vídeo", "Create video")}</strong><small>{t("Anima una imagen adjunta", "Animate an attached image")}</small></span></button>
+          </div>
+          <button className="attachment-menu__upload" onClick={() => { setAttachmentOpen(false); void uploadFiles(); }}><Upload size={14} />{t("Subir archivo o imagen", "Upload file or image")}</button>
+          {codeMode && project && <div className="external-folder-actions"><button type="button" onClick={() => { setAttachmentOpen(false); void grantExternalFolder("read"); }}><FolderPlus size={14} />{t("Añadir carpeta de lectura", "Add read-only folder")}</button><button type="button" onClick={() => { setAttachmentOpen(false); void grantExternalFolder("write"); }}><FolderPlus size={14} />{t("Añadir carpeta con edición", "Add editable folder")}</button></div>}
+          {codeMode && openFiles.length > 0 && <div className="attachment-menu__files">{openFiles.map((file) => <label key={file.relativePath}><input type="checkbox" checked={projectAttachments.includes(file.relativePath)} onChange={() => toggleProjectAttachment(file.relativePath)} /><FileCode2 size={14} /><span>{file.relativePath}</span><small>{Math.ceil(file.content.length / 4).toLocaleString()} tokens</small></label>)}</div>}
+        </div>}
         {!!commandSuggestions.length && <div className="slash-command-menu" role="listbox" aria-label={t("Comandos del chat", "Chat commands")}>{commandSuggestions.map((item) => <button type="button" key={item.command} onClick={() => { setInput(""); runCommand(item.command); }}><code>{item.command}</code><span><strong>{t(item.label[0], item.label[1])}</strong><small>{t(item.description[0], item.description[1])}</small></span></button>)}</div>}
-        <div className="chat-composer"><textarea value={input} onChange={(event) => setInput(event.target.value)} onPaste={handlePaste} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!generatingElsewhere) void send(); } }} placeholder={generatingElsewhere ? t("Puedes seguir escribiendo; hay una respuesta en curso en otro chat…", "You can keep typing; another chat is responding…") : ready ? (codeMode ? t("Pide un cambio o pregunta sobre el proyecto…", "Ask for a change or about the project…") : t("Pregunta lo que quieras…", "Ask anything…")) : t("Selecciona un modelo para comenzar", "Select a model to begin")} disabled={!ready || generatingHere} rows={2} /><footer><div><button className="composer-button composer-button--attach" disabled={generatingHere} onClick={() => setAttachmentOpen((value) => !value)} aria-expanded={attachmentOpen} title={t("Adjuntar archivo o imagen", "Attach file or image")} aria-label={t("Adjuntar archivo o imagen", "Attach file or image")}><Plus size={16} /></button><span>{generatingElsewhere ? t("Respuesta en curso en otro chat", "Response in progress in another chat") : `${estimatedTokens.toLocaleString()} ${t("tokens aprox.", "approx. tokens")}`}</span></div><div className="composer-actions">{!codeMode && <button className="composer-button composer-button--image" type="button" onClick={() => void createImageInChat()} disabled={generatingElsewhere || generatingHere || !input.trim()} title="Crear imagen con NVIDIA"><Sparkles size={15} /></button>}{codeMode && project && conversation && <label className={`approval-control approval-control--${conversation.approvalMode}`} title={t("Controla cuándo Vareliox necesita tu aprobación", "Controls when Vareliox needs your approval")}><ShieldCheck size={14} /><select value={conversation.approvalMode} onChange={(event) => updateConversation((item) => ({ ...item, approvalMode: event.target.value as Conversation["approvalMode"], updatedAt: Date.now() }))} aria-label={t("Permisos de la conversación", "Conversation permissions")}><option value="ask">{t("Solicitar aprobación", "Ask for approval")}</option><option value="auto">{t("Aprobar por mí", "Approve for me")}</option><option value="full">{t("Acceso completo", "Full access")}</option></select></label>}{settings && <ChatModelPicker projectPath={project?.path ?? null} settings={settings} disabled={generatingHere} onChange={onSettingsChange} onConfigure={onConfigure} />}{generatingHere ? <button className="stop-button" onClick={() => void stop()}><Square size={13} fill="currentColor" />{t("Detener", "Stop")}</button> : <button className="send-button" title={generatingElsewhere ? t("Espera a que termine la respuesta del otro chat", "Wait for the other chat response to finish") : undefined} disabled={generatingElsewhere || !ready || (!input.trim() && uploads.length === 0 && projectAttachments.length === 0)} onClick={() => void send()} aria-label={t("Enviar", "Send")}><Send size={16} /></button>}</div></footer></div>
+        <div className="chat-composer">
+          {mediaTool.mode !== "chat" && <div className="composer-media-tool"><span>{mediaTool.mode === "image" ? <ImagePlus size={16} /> : <Video size={16} />}{mediaTool.mode === "image" ? t("Crear imagen", "Create image") : t("Crear vídeo", "Create video")}</span><button type="button" onClick={() => chooseTool("chat")} aria-label={t("Volver al chat", "Return to chat")}><X size={16} /></button>{!availableMediaProviders(settings?.providers ?? [], mediaTool.mode).length && <button type="button" onClick={onConfigure}>{t("Configurar proveedor", "Configure provider")}</button>}</div>}
+          <textarea ref={composerRef} value={input} onChange={(event) => setInput(event.target.value)} onPaste={handlePaste} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!generatingElsewhere) void send(); } }} placeholder={generatingElsewhere ? t("Puedes seguir escribiendo; hay una respuesta en curso en otro chat…", "You can keep typing; another chat is responding…") : mediaTool.mode !== "chat" ? t("Describe lo que quieres crear…", "Describe what you want to create…") : ready ? (codeMode ? t("Pide un cambio o pregunta sobre el proyecto…", "Ask for a change or about the project…") : t("Pregunta lo que quieras…", "Ask anything…")) : mediaReady ? t("Elige imagen o vídeo en +, o selecciona un modelo de conversación", "Choose image or video in +, or select a conversation model") : t("Selecciona un modelo para comenzar", "Select a model to begin")} disabled={generatingHere} rows={2} />
+          <footer>
+            <div><button ref={attachmentButtonRef} className="composer-button composer-button--attach" disabled={generatingHere} onClick={() => setAttachmentOpen((value) => !value)} aria-expanded={attachmentOpen} title={t("Adjuntar, crear imagen o usar herramientas", "Attach, create media, or use tools")} aria-label={t("Adjuntar y herramientas", "Attachments and tools")}><Plus size={18} /></button><span>{generatingElsewhere ? t("Respuesta en curso en otro chat", "Response in progress in another chat") : `${estimatedTokens.toLocaleString()} ${t("tokens aprox.", "approx. tokens")}`}</span></div>
+            <div className="composer-actions">
+              {codeMode && project && conversation && <ApprovalPicker value={conversation.approvalMode} onChange={(approvalMode) => updateConversation((item) => ({ ...item, approvalMode, updatedAt: Date.now() }))} />}
+              {settings && <ChatModelPicker projectPath={project?.path ?? null} settings={settings} disabled={generatingHere} onChange={onSettingsChange} onConfigure={onConfigure} capability={mediaTool.mode} mediaConfigId={mediaTool.configId} onCapabilityChange={(tool) => chooseTool(tool, false)} onMediaProviderChange={(configId) => { if (conversation) setMediaTools((current) => ({ ...current, [conversation.id]: { ...mediaTool, configId } })); }} />}
+              {generatingHere ? <button className="stop-button" onClick={() => void stop()}><Square size={13} fill="currentColor" />{t("Detener", "Stop")}</button> : <button className="send-button" title={generatingElsewhere ? t("Espera a que termine la respuesta del otro chat", "Wait for the other chat response to finish") : undefined} disabled={generatingElsewhere || (!ready && mediaTool.mode === "chat" && !requestedMediaMode(input)) || (!input.trim() && uploads.length === 0 && projectAttachments.length === 0)} onClick={() => void send()} aria-label={t("Enviar", "Send")}><Send size={17} /></button>}
+            </div>
+          </footer>
+        </div>
       </div>
       {project && <div hidden={!terminalOpen}><NovaTerminalPanel key={`${project.path}:${conversation?.id}`} root={project.path} projectName={project.name} onClose={() => setTerminalOpen(false)} /></div>}
     </section>

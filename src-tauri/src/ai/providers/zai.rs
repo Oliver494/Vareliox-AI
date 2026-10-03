@@ -27,6 +27,7 @@ pub fn models() -> Vec<ModelInfo> {
         name: name.into(),
         loaded: None,
         context_window: None,
+        capabilities: vec!["chat".into()],
     })
     .collect()
 }

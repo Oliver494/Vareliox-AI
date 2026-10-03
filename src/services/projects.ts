@@ -29,7 +29,7 @@ export function loadProjects(): ProjectInfo[] {
 
 export function rememberProject(projects: ProjectInfo[], project: ProjectInfo) {
   const key = normalizePath(project.path);
-  const next = sortProjects([project, ...projects.filter((item) => normalizePath(item.path) !== key)]).slice(0, 30);
+  const next = sortProjects([project, ...projects.filter((item) => normalizePath(item.path) !== key)]);
   localStorage.setItem(PROJECTS_KEY, JSON.stringify(next));
   return next;
 }

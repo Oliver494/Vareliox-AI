@@ -100,7 +100,14 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub logo_data_url: Option<String>,
     pub endpoint: String,
+    #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub models: ProviderModels,
+    #[serde(default = "default_provider_capabilities")]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub media_verification: Option<MediaVerification>,
     #[serde(default)]
     pub reasoning_effort: ReasoningEffort,
     pub connect_timeout_secs: u64,
@@ -111,8 +118,48 @@ pub struct ProviderConfig {
     pub api_key_configured: bool,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModels {
+    #[serde(default)]
+    pub chat: String,
+    #[serde(default)]
+    pub image: String,
+    #[serde(default)]
+    pub video: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaVerification {
+    pub endpoint: String,
+    pub image_model: String,
+}
+
+fn default_provider_capabilities() -> Vec<String> {
+    vec!["chat".into()]
+}
+
 impl ProviderConfig {
     pub fn defaults(provider: ProviderId) -> Self {
+        let mut models = ProviderModels::default();
+        let mut capabilities = default_provider_capabilities();
+        match provider {
+            ProviderId::Nvidia => {
+                models.image = "black-forest-labs/flux.1-schnell".into();
+                models.video = "stabilityai/stable-video-diffusion".into();
+                capabilities.extend(["image".into(), "video".into()]);
+            }
+            ProviderId::OpenAi => {
+                models.image = "gpt-image-1".into();
+                capabilities.push("image".into());
+            }
+            ProviderId::Gemini => {
+                models.image = "gemini-3.1-flash-image".into();
+                capabilities.push("image".into());
+            }
+            _ => {}
+        }
         Self {
             config_id: provider.as_str().to_string(),
             provider,
@@ -120,6 +167,9 @@ impl ProviderConfig {
             logo_data_url: None,
             endpoint: provider.default_endpoint().to_string(),
             model: String::new(),
+            models,
+            capabilities,
+            media_verification: None,
             reasoning_effort: ReasoningEffort::Medium,
             connect_timeout_secs: 5,
             // Los modelos locales pueden necesitar cargar pesos; las APIs externas pueden
@@ -172,6 +222,8 @@ pub struct ModelInfo {
     pub name: String,
     pub loaded: Option<bool>,
     pub context_window: Option<u64>,
+    #[serde(default = "default_provider_capabilities")]
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -316,8 +368,16 @@ pub struct MediaGenerationRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaGenerationResult {
+    pub id: String,
     pub media_type: String,
     pub data_url: String,
+    pub uri: Option<String>,
+    pub mime_type: String,
+    pub provider: ProviderId,
+    pub model: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub duration_ms: Option<u64>,
     pub seed: Option<u64>,
 }
 

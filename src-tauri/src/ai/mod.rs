@@ -1,24 +1,30 @@
 pub mod config;
 pub mod error;
+pub mod installed_models;
+pub mod local_media;
 pub mod providers;
 pub mod secrets;
 pub mod types;
 
 use crate::{ensure_context_file_allowed, read_project_file_inner};
+use base64::Engine as _;
 use error::{connection_error, http_error, Diagnostic};
 use futures_util::StreamExt;
 use providers::{
     chat_request, list_models, nvidia_status_request, parse_stream, test_zai_connection,
 };
 use reqwest::Client;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    fs,
+    io::Write,
+    path::{Component, Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
 };
-use tauri::{ipc::Channel, AppHandle, State};
+use tauri::{ipc::Channel, AppHandle, Manager, State};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use types::{
@@ -31,6 +37,7 @@ use types::{
 pub struct AiState {
     active: Mutex<HashMap<String, CancellationToken>>,
     clients: Mutex<HashMap<ClientKey, Client>>,
+    media_worker: Mutex<()>,
 }
 
 impl Default for AiState {
@@ -38,6 +45,7 @@ impl Default for AiState {
         Self {
             active: Mutex::new(HashMap::new()),
             clients: Mutex::new(HashMap::new()),
+            media_worker: Mutex::new(()),
         }
     }
 }
@@ -297,6 +305,71 @@ const NVIDIA_IMAGE_MODELS: &[&str] = &[
 ];
 const NVIDIA_VIDEO_MODELS: &[&str] = &["stabilityai/stable-video-diffusion"];
 
+#[tauri::command]
+pub async fn list_media_models(
+    app: AppHandle,
+    config: ProviderConfig,
+    mode: String,
+    project_path: Option<String>,
+    state: State<'_, AiState>,
+) -> Result<Vec<ModelInfo>, Diagnostic> {
+    if mode != "image" && mode != "video" {
+        return Err(media_error("Capacidad multimedia desconocida."));
+    }
+    if config.provider.is_local() {
+        return Ok(local_media::list_local_media_models(app)?
+            .into_iter()
+            .filter(|model| model.capabilities.contains(&mode))
+            .collect());
+    }
+    // NVIDIA's chat listing omits models hosted on its separate genai endpoint.
+    // This is the adapter's supported catalog, not a claim of account entitlement.
+    if config.provider == ProviderId::Nvidia {
+        let ids = if mode == "image" {
+            NVIDIA_IMAGE_MODELS
+        } else {
+            NVIDIA_VIDEO_MODELS
+        };
+        return Ok(ids
+            .iter()
+            .map(|id| ModelInfo {
+                id: (*id).into(),
+                name: (*id).into(),
+                loaded: None,
+                context_window: None,
+                capabilities: vec![mode.clone()],
+            })
+            .collect());
+    }
+    if mode == "video"
+        || !matches!(
+            config.provider,
+            ProviderId::OpenAi | ProviderId::Gemini | ProviderId::Custom
+        )
+    {
+        return Ok(vec![]);
+    }
+    let mut models = models_for(config.clone(), project_path, &state)
+        .await?
+        .into_iter()
+        .filter(|model| model.capabilities.contains(&mode))
+        .collect::<Vec<_>>();
+    let configured = &config.models.image;
+    if !configured.is_empty() && !models.iter().any(|model| &model.id == configured) {
+        models.insert(
+            0,
+            ModelInfo {
+                id: configured.clone(),
+                name: configured.clone(),
+                loaded: None,
+                context_window: None,
+                capabilities: vec![mode],
+            },
+        );
+    }
+    Ok(models)
+}
+
 fn media_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(
         "MEDIA_GENERATION_FAILED",
@@ -390,6 +463,7 @@ fn nvidia_media_result(
     value: &Value,
     media_type: &str,
     image_prefix: &str,
+    request: &MediaGenerationRequest,
 ) -> Result<MediaGenerationResult, Diagnostic> {
     let artifact = value
         .get("artifacts")
@@ -417,82 +491,606 @@ fn nvidia_media_result(
         image_prefix
     };
     Ok(MediaGenerationResult {
+        id: request.request_id.clone(),
         media_type: media_type.into(),
         data_url: format!("{prefix}{raw}"),
+        uri: None,
+        mime_type: if media_type == "video" {
+            "video/mp4"
+        } else if image_prefix.contains("jpeg") {
+            "image/jpeg"
+        } else {
+            "image/png"
+        }
+        .into(),
+        provider: request.config.provider,
+        model: request.model.clone(),
+        width: None,
+        height: None,
+        duration_ms: None,
         seed: artifact
             .and_then(|item| item.get("seed"))
             .and_then(Value::as_u64),
     })
 }
 
+fn media_error_with_details(message: &str, details: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(
+        "MEDIA_STORAGE_ERROR",
+        "No se pudo guardar el archivo multimedia",
+        message,
+        "El almacenamiento local rechazó el archivo generado.",
+        "Comprueba el espacio disponible y vuelve a intentarlo.",
+        true,
+    )
+    .technical(details)
+}
+
+fn decode_media_data_url(data_url: &str) -> Result<Vec<u8>, Diagnostic> {
+    let (_metadata, encoded) = data_url
+        .split_once(',')
+        .filter(|(metadata, _)| metadata.starts_with("data:") && metadata.ends_with(";base64"))
+        .ok_or_else(|| {
+            media_error("El proveedor devolvió un archivo multimedia con formato no válido.")
+        })?;
+    if encoded.len() > 700_000_000 {
+        return Err(media_error(
+            "El archivo multimedia supera el límite de almacenamiento local.",
+        ));
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| {
+            media_error_with_details(
+                "No se pudo decodificar el archivo generado.",
+                error.to_string(),
+            )
+        })
+}
+
+fn media_extension(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "video/webm" => "webm",
+        "video/mp4" => "mp4",
+        _ => "png",
+    }
+}
+
+fn media_storage_directory(app: &AppHandle) -> Result<PathBuf, Diagnostic> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("media"))
+        .map_err(|error| {
+            media_error_with_details(
+                "No se encontró la carpeta de datos de Vareliox.",
+                error.to_string(),
+            )
+        })
+}
+
+fn persist_media_result(
+    app: &AppHandle,
+    result: &mut MediaGenerationResult,
+) -> Result<(), Diagnostic> {
+    result.uri = Some(persist_media_data(
+        app,
+        &result.id,
+        &result.mime_type,
+        &result.data_url,
+    )?);
+    // The binary is now on disk; do not send or store a second base64 copy.
+    result.data_url.clear();
+    Ok(())
+}
+
+fn persist_media_data(
+    app: &AppHandle,
+    id: &str,
+    mime_type: &str,
+    data_url: &str,
+) -> Result<String, Diagnostic> {
+    if !matches!(
+        mime_type,
+        "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "video/webm"
+    ) {
+        return Err(media_error(
+            "El tipo de archivo multimedia no es compatible.",
+        ));
+    }
+    let expected_prefix = format!("data:{mime_type};base64,");
+    if !data_url.starts_with(&expected_prefix) {
+        return Err(media_error(
+            "El tipo declarado no coincide con el archivo multimedia.",
+        ));
+    }
+    let bytes = decode_media_data_url(data_url)?;
+    let directory = media_storage_directory(app)?;
+    Ok(store_media_bytes(&directory, id, mime_type, &bytes)?
+        .to_string_lossy()
+        .into_owned())
+}
+
+fn store_media_bytes(
+    directory: &Path,
+    id: &str,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, Diagnostic> {
+    if id.is_empty()
+        || id.len() > 100
+        || !id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err(media_error("El identificador multimedia no es válido."));
+    }
+    fs::create_dir_all(&directory).map_err(|error| {
+        media_error_with_details(
+            "No se pudo preparar la carpeta multimedia.",
+            error.to_string(),
+        )
+    })?;
+    let directory_metadata = fs::symlink_metadata(directory).map_err(|error| {
+        media_error_with_details(
+            "No se pudo comprobar la carpeta multimedia.",
+            error.to_string(),
+        )
+    })?;
+    if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+        return Err(media_error("La carpeta multimedia no es segura."));
+    }
+    let path = directory.join(format!("{}.{}", id, media_extension(mime_type)));
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                media_error_with_details(
+                    "No se pudo comprobar el archivo multimedia.",
+                    error.to_string(),
+                )
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(media_error("El archivo multimedia existente no es seguro."));
+            }
+            if fs::read(&path)
+                .map(|existing| existing == bytes)
+                .unwrap_or(false)
+            {
+                return Ok(path);
+            }
+            return Err(media_error(
+                "Ya existe otro archivo multimedia con ese identificador.",
+            ));
+        }
+        Err(error) => {
+            return Err(media_error_with_details(
+                "No se pudo crear el archivo multimedia.",
+                error.to_string(),
+            ));
+        }
+    };
+    if let Err(error) = file.write_all(bytes) {
+        let _ = fs::remove_file(&path);
+        return Err(media_error_with_details(
+            "No se pudo escribir el archivo generado.",
+            error.to_string(),
+        ));
+    }
+    Ok(path)
+}
+
 #[tauri::command]
-pub async fn generate_nvidia_media(
+pub fn persist_legacy_media(
+    app: AppHandle,
+    id: String,
+    mime_type: String,
+    data_url: String,
+) -> Result<String, Diagnostic> {
+    if id.trim().is_empty() {
+        return Err(media_error("Falta el identificador del archivo antiguo."));
+    }
+    persist_media_data(&app, &id, &mime_type, &data_url)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaStorageStats {
+    files: u64,
+    bytes: u64,
+}
+
+fn read_media_storage_stats(directory: &Path) -> Result<MediaStorageStats, Diagnostic> {
+    if !directory.exists() {
+        return Ok(MediaStorageStats { files: 0, bytes: 0 });
+    }
+    let mut stats = MediaStorageStats { files: 0, bytes: 0 };
+    for entry in fs::read_dir(directory).map_err(|error| {
+        media_error_with_details("No se pudo leer el almacén multimedia.", error.to_string())
+    })? {
+        let entry = entry.map_err(|error| {
+            media_error_with_details("No se pudo leer un archivo multimedia.", error.to_string())
+        })?;
+        let metadata = entry.metadata().map_err(|error| {
+            media_error_with_details(
+                "No se pudo comprobar un archivo multimedia.",
+                error.to_string(),
+            )
+        })?;
+        if metadata.is_file() {
+            stats.files += 1;
+            stats.bytes = stats.bytes.saturating_add(metadata.len());
+        }
+    }
+    Ok(stats)
+}
+
+#[tauri::command]
+pub fn media_storage_stats(app: AppHandle) -> Result<MediaStorageStats, Diagnostic> {
+    read_media_storage_stats(&media_storage_directory(&app)?)
+}
+
+#[tauri::command]
+pub fn cleanup_orphaned_media(
+    app: AppHandle,
+    keep_uris: Vec<String>,
+) -> Result<MediaStorageStats, Diagnostic> {
+    let directory = media_storage_directory(&app)?;
+    if !directory.exists() {
+        return Ok(MediaStorageStats { files: 0, bytes: 0 });
+    }
+    let directory = directory.canonicalize().map_err(|error| {
+        media_error_with_details(
+            "No se pudo comprobar el almacén multimedia.",
+            error.to_string(),
+        )
+    })?;
+    let keep = keep_uris
+        .into_iter()
+        .filter_map(|uri| PathBuf::from(uri).canonicalize().ok())
+        .filter(|path| path.starts_with(&directory))
+        .collect::<std::collections::HashSet<_>>();
+    for entry in fs::read_dir(&directory).map_err(|error| {
+        media_error_with_details("No se pudo leer el almacén multimedia.", error.to_string())
+    })? {
+        let entry = entry.map_err(|error| {
+            media_error_with_details("No se pudo leer un archivo multimedia.", error.to_string())
+        })?;
+        let path = entry.path();
+        if entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if !keep.contains(&canonical) {
+                fs::remove_file(&path).map_err(|error| {
+                    media_error_with_details(
+                        "No se pudo eliminar un archivo multimedia huérfano.",
+                        error.to_string(),
+                    )
+                })?;
+            }
+        }
+    }
+    read_media_storage_stats(&directory)
+}
+
+fn safe_project_media_path(root: &Path, relative_path: &str) -> Result<PathBuf, Diagnostic> {
+    let relative = Path::new(relative_path);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(Diagnostic::new(
+            "INVALID_PATH",
+            "Ruta no válida",
+            "El destino debe ser una ruta relativa dentro del proyecto.",
+            "La ruta contiene componentes absolutos o intenta salir del proyecto.",
+            "Usa una ruta como assets/generated/imagen.png.",
+            false,
+        ));
+    }
+    let root = root.canonicalize().map_err(|error| {
+        media_error_with_details(
+            "No se pudo abrir la carpeta del proyecto.",
+            error.to_string(),
+        )
+    })?;
+    let mut parent = root.clone();
+    if let Some(relative_parent) = relative.parent() {
+        for component in relative_parent.components() {
+            let Component::Normal(name) = component else {
+                unreachable!()
+            };
+            parent.push(name);
+            match fs::symlink_metadata(&parent) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                    return Err(media_error("La carpeta de destino no es segura."));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::create_dir(&parent).map_err(|error| {
+                        media_error_with_details(
+                            "No se pudo crear la carpeta de destino.",
+                            error.to_string(),
+                        )
+                    })?;
+                }
+                Err(error) => {
+                    return Err(media_error_with_details(
+                        "No se pudo comprobar la carpeta de destino.",
+                        error.to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    let destination = root.join(relative);
+    if fs::symlink_metadata(&destination).is_ok() {
+        return Err(media_error(
+            "Ya existe un archivo con ese nombre. Elige otro destino para conservarlo.",
+        ));
+    }
+    Ok(destination)
+}
+
+#[tauri::command]
+pub fn save_media_to_project(
+    app: AppHandle,
+    source_uri: Option<String>,
+    data_url: String,
+    project_path: String,
+    relative_path: String,
+) -> Result<String, Diagnostic> {
+    let destination = safe_project_media_path(Path::new(&project_path), &relative_path)?;
+    let bytes = read_media_source(&app, source_uri, &data_url)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|error| {
+            media_error_with_details(
+                "No se pudo crear el archivo en el proyecto.",
+                error.to_string(),
+            )
+        })?;
+    file.write_all(&bytes).map_err(|error| {
+        media_error_with_details(
+            "No se pudo guardar el archivo en el proyecto.",
+            error.to_string(),
+        )
+    })?;
+    Ok(relative_path.replace('\\', "/"))
+}
+
+fn read_media_source(
+    app: &AppHandle,
+    source_uri: Option<String>,
+    data_url: &str,
+) -> Result<Vec<u8>, Diagnostic> {
+    let bytes = if let Some(source_uri) = source_uri.filter(|value| !value.trim().is_empty()) {
+        let source = PathBuf::from(source_uri).canonicalize().map_err(|error| {
+            media_error_with_details(
+                "El archivo generado ya no está disponible.",
+                error.to_string(),
+            )
+        })?;
+        let media_root = media_storage_directory(&app)?
+            .canonicalize()
+            .map_err(|error| {
+                media_error_with_details("No se encontró el almacén multimedia.", error.to_string())
+            })?;
+        if !source.starts_with(media_root) {
+            return Err(Diagnostic::new(
+                "PERMISSION_DENIED",
+                "Origen no autorizado",
+                "Vareliox solo puede copiar resultados generados por la propia aplicación.",
+                "El archivo de origen está fuera del almacén multimedia.",
+                "Vuelve a generar el archivo o usa Descargar.",
+                false,
+            ));
+        }
+        fs::read(source).map_err(|error| {
+            media_error_with_details("No se pudo leer el archivo generado.", error.to_string())
+        })?
+    } else {
+        decode_media_data_url(data_url)?
+    };
+    Ok(bytes)
+}
+
+#[tauri::command]
+pub fn export_media(
+    app: AppHandle,
+    source_uri: Option<String>,
+    data_url: String,
+    destination: String,
+) -> Result<(), Diagnostic> {
+    let destination = PathBuf::from(destination);
+    if !destination.is_absolute() || destination.is_dir() {
+        return Err(media_error("Elige un archivo de destino válido."));
+    }
+    let bytes = read_media_source(&app, source_uri, &data_url)?;
+    fs::write(&destination, bytes).map_err(|error| {
+        media_error_with_details(
+            "No se pudo descargar el archivo generado.",
+            error.to_string(),
+        )
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn generate_media(
+    app: AppHandle,
     request: MediaGenerationRequest,
     project_path: Option<String>,
+    on_event: Channel<LocalModelDownloadEvent>,
     state: State<'_, AiState>,
 ) -> Result<MediaGenerationResult, Diagnostic> {
     if request.request_id.trim().is_empty() {
         return Err(media_error("Falta el identificador de la generación."));
     }
-    if request.config.provider != ProviderId::Nvidia {
+    if request.prompt.trim().is_empty() || request.prompt.chars().count() > 10_000 {
+        return Err(media_error(
+            "Escribe una descripción de hasta 10.000 caracteres.",
+        ));
+    }
+    if request.config.provider.is_local() && local_media::is_model(&request.model) {
+        return local_media::generate(&app, &request, &on_event, &state).await;
+    }
+    if request.mode == "video" && request.config.provider != ProviderId::Nvidia {
         return Err(Diagnostic::new(
             "UNSUPPORTED_PROVIDER",
-            "Este creador usa NVIDIA API",
-            "Selecciona y configura NVIDIA API para generar imágenes o vídeos.",
-            "Los modelos de creación de esta versión usan los endpoints oficiales de NVIDIA.",
-            "Abre Proveedores, configura NVIDIA API y vuelve a intentarlo.",
+            "Vídeo no disponible",
+            "Este proveedor no tiene un adaptador de vídeo verificado.",
+            "Vareliox solo activa capacidades comprobadas.",
+            "Configura NVIDIA o un runtime local compatible.",
             false,
         ));
     }
-    let body = nvidia_media_payload(&request)?;
-    let key = key_for(&request.config, project_path.as_deref())?.ok_or_else(|| {
-        Diagnostic::new(
-            "INVALID_API_KEY",
-            "Falta la clave API",
-            "NVIDIA API necesita una clave configurada.",
-            "La configuración está incompleta.",
-            "Guarda la clave de NVIDIA y vuelve a intentarlo.",
-            false,
-        )
-    })?;
+    let key = key_for(&request.config, project_path.as_deref())?;
     let client = client_for(&request.config, &state).await?;
-    let url = format!("https://ai.api.nvidia.com/v1/genai/{}", request.model);
+    let provider_name = request.config.provider.display_name();
+    let (url, body, gemini) = match request.config.provider {
+        ProviderId::Nvidia => (
+            format!("https://ai.api.nvidia.com/v1/genai/{}", request.model),
+            nvidia_media_payload(&request)?,
+            false,
+        ),
+        ProviderId::OpenAi if request.mode == "image" => (
+            format!("{}/images/generations", request.config.endpoint.trim_end_matches('/')),
+            json!({"model": request.model, "prompt": request.prompt.trim(), "size": "1024x1024"}),
+            false,
+        ),
+        ProviderId::Custom if request.mode == "image" => (
+            format!("{}/images/generations", request.config.endpoint.trim_end_matches('/')),
+            json!({"model": request.model, "prompt": request.prompt.trim(), "size": "1024x1024", "response_format": "b64_json"}),
+            false,
+        ),
+        ProviderId::Gemini if request.mode == "image" => (
+            format!("{}/models/{}:generateContent", request.config.endpoint.trim_end_matches('/'), request.model),
+            json!({"contents": [{"parts": [{"text": request.prompt.trim()}]}], "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}}),
+            true,
+        ),
+        _ => return Err(Diagnostic::new("UNSUPPORTED_PROVIDER", "Generación no disponible", "Este proveedor no tiene un adaptador multimedia verificado.", "El modelo puede conversar, pero Vareliox no puede extraer un archivo multimedia de forma segura.", "Configura NVIDIA, OpenAI, Gemini o una API personalizada compatible con OpenAI Images.", false)),
+    };
     let token = CancellationToken::new();
     state
         .active
         .lock()
         .await
         .insert(request.request_id.clone(), token.clone());
-    // Visual NIM endpoints sometimes need to provision a worker before they
-    // return the first artifact. Keep a finite cap, but do not cut a valid
-    // generation after the old 45-second window. The UI can cancel this token
-    // at any moment, so the user never has to wait for the whole limit.
     let request_timeout =
         Duration::from_secs(request.config.max_response_timeout_secs.clamp(45, 180));
+    let mut outgoing = client
+        .post(&url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .json(&body);
+    outgoing = if gemini {
+        outgoing.header("x-goog-api-key", key.as_deref().unwrap_or_default())
+    } else if let Some(key) = key.as_deref() {
+        outgoing.bearer_auth(key)
+    } else {
+        outgoing
+    };
     let response = tokio::select! {
-        _ = token.cancelled() => Err(Diagnostic::new("CANCELLED", "Creación cancelada", "Cancelaste la creación antes de que NVIDIA terminara.", "La petición fue interrumpida por el usuario.", "Escribe otra idea cuando quieras.", false)),
-        result = tokio::time::timeout(request_timeout, client.post(url).bearer_auth(key).header(reqwest::header::ACCEPT, "application/json").json(&body).send()) => result
-            .map_err(|_| Diagnostic::new("REQUEST_TIMEOUT", "NVIDIA no respondió a tiempo", "NVIDIA no terminó la creación en un máximo de 180 segundos.", "El endpoint de generación está ocupado, está preparando un modelo o no está disponible para esta clave en este momento.", "Pulsa Reintentar, cambia de modelo o usa Cancelar para detener la espera.", true))
-            .and_then(|response| response.map_err(|error| connection_error("NVIDIA API", "https://ai.api.nvidia.com", &error))),
+        _ = token.cancelled() => Err(Diagnostic::new("CANCELLED", "Creación cancelada", "Cancelaste la creación antes de que el proveedor terminara.", "La petición fue interrumpida por el usuario.", "Escribe otra idea cuando quieras.", false)),
+        result = tokio::time::timeout(request_timeout, outgoing.send()) => result
+            .map_err(|_| Diagnostic::new("REQUEST_TIMEOUT", "El proveedor no respondió a tiempo", "La creación superó el límite configurado.", "El endpoint está ocupado, preparando un modelo o no está disponible.", "Pulsa Reintentar, cambia de modelo o usa Cancelar.", true))
+            .and_then(|response| response.map_err(|error| connection_error(provider_name, &request.config.endpoint, &error))),
+    };
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            state.active.lock().await.remove(&request.request_id);
+            return Err(error);
+        }
+    };
+    let status = response.status();
+    let response_body = tokio::select! {
+        _ = token.cancelled() => Err(Diagnostic::new("CANCELLED", "Creación cancelada", "Cancelaste la creación antes de que el proveedor terminara.", "La petición fue interrumpida por el usuario.", "Escribe otra idea cuando quieras.", false)),
+        body = tokio::time::timeout(request_timeout, response.text()) => body
+            .map_err(|_| Diagnostic::new("REQUEST_TIMEOUT", "El proveedor no respondió a tiempo", "La descarga del archivo generado superó el límite configurado.", "El servidor dejó de enviar datos o el archivo es demasiado grande.", "Pulsa Reintentar o cambia de modelo.", true))
+            .and_then(|body| body.map_err(|_| media_error("La respuesta del proveedor se interrumpió."))),
     };
     state.active.lock().await.remove(&request.request_id);
-    let response = response?;
-    let status = response.status();
-    let response_body = response
-        .text()
-        .await
-        .map_err(|_| media_error("La respuesta de NVIDIA se interrumpió."))?;
+    let response_body = response_body?;
     if !status.is_success() {
-        return Err(http_error(status, &response_body, "NVIDIA API"));
+        return Err(http_error(status, &response_body, provider_name));
     }
     let value: Value = serde_json::from_str(&response_body)
-        .map_err(|_| media_error("NVIDIA devolvió una respuesta de creación no válida."))?;
-    let image_prefix = if request.model == "stabilityai/stable-diffusion-3-medium" {
-        "data:image/jpeg;base64,"
+        .map_err(|_| media_error("El proveedor devolvió una respuesta de creación no válida."))?;
+    if request.config.provider == ProviderId::Nvidia {
+        let image_prefix = if request.model == "stabilityai/stable-diffusion-3-medium" {
+            "data:image/jpeg;base64,"
+        } else {
+            "data:image/png;base64,"
+        };
+        let mut result = nvidia_media_result(&value, &request.mode, image_prefix, &request)?;
+        persist_media_result(&app, &mut result)?;
+        return Ok(result);
+    }
+    let (raw, mime) = if request.config.provider == ProviderId::Gemini {
+        let image = value
+            .get("output_image")
+            .or_else(|| value.get("outputImage"));
+        let inline = value
+            .pointer("/candidates/0/content/parts")
+            .and_then(Value::as_array)
+            .and_then(|parts| {
+                parts
+                    .iter()
+                    .filter(|part| part.get("thought").and_then(Value::as_bool) != Some(true))
+                    .find_map(|part| part.get("inlineData").or_else(|| part.get("inline_data")))
+            });
+        let raw = image
+            .and_then(|item| item.get("data"))
+            .or_else(|| inline.and_then(|item| item.get("data")))
+            .and_then(Value::as_str)
+            .ok_or_else(|| media_error("Gemini respondió sin datos de imagen."))?;
+        let mime = image
+            .and_then(|item| item.get("mime_type").or_else(|| item.get("mimeType")))
+            .or_else(|| {
+                inline.and_then(|item| item.get("mime_type").or_else(|| item.get("mimeType")))
+            })
+            .and_then(Value::as_str)
+            .unwrap_or("image/png");
+        (raw, mime)
     } else {
-        "data:image/png;base64,"
+        let first = value
+            .get("data")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first());
+        let raw = first
+            .and_then(|item| item.get("b64_json").or_else(|| item.get("base64")))
+            .and_then(Value::as_str)
+            .ok_or_else(|| media_error("La API respondió sin una imagen codificada en base64."))?;
+        (raw, "image/png")
     };
-    nvidia_media_result(&value, &request.mode, image_prefix)
+    let mut result = MediaGenerationResult {
+        id: request.request_id.clone(),
+        media_type: "image".into(),
+        data_url: format!("data:{mime};base64,{raw}"),
+        uri: None,
+        mime_type: mime.into(),
+        provider: request.config.provider,
+        model: request.model.clone(),
+        width: None,
+        height: None,
+        duration_ms: None,
+        seed: None,
+    };
+    persist_media_result(&app, &mut result)?;
+    Ok(result)
 }
 
 fn html_attribute(tag: &str, name: &str) -> Option<String> {
@@ -1104,7 +1702,10 @@ fn local_model_catalog() -> Vec<LocalModelCatalogItem> {
 
 #[tauri::command]
 pub fn list_local_model_catalog() -> Vec<LocalModelCatalogItem> {
-    local_model_catalog()
+    let mut models = local_model_catalog();
+    models.retain(|model| !model.runtimes.iter().any(|runtime| runtime == "comfyui"));
+    models.extend(local_media::catalog());
+    models
 }
 
 #[tauri::command]
@@ -1263,6 +1864,7 @@ fn comfy_has_local_installation() -> bool {
     false
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn comfy_installations_include_local(value: &Value) -> bool {
     value.as_array().is_some_and(|items| {
         items.iter().any(|item| {
@@ -1749,16 +2351,17 @@ pub async fn test_ai_provider(
                     } else {
                         Diagnostic::new(
                             "PROVIDER_NOT_INSTALLED",
-                            format!("{} no está instalado", config.provider.display_name()),
+                            format!("No responde {}", config.provider.display_name()),
                             format!(
-                                "No encontramos {} en las ubicaciones habituales de Windows.",
-                                config.provider.display_name()
+                                "No encontramos el servidor de {} en {} ni una instalación local reconocible.",
+                                config.provider.display_name(), config.endpoint
                             ),
-                            "El proveedor local no está instalado para este usuario.",
-                            format!(
-                                "Instala {} desde su fuente oficial y vuelve a probar.",
-                                config.provider.display_name()
-                            ),
+                            "El servidor no responde; la instalación no pudo confirmarse.",
+                            if config.provider == ProviderId::LmStudio {
+                                "Abre LM Studio y activa Start server en Developer; comprueba que el puerto coincida."
+                            } else {
+                                "Abre Ollama o instálalo desde su fuente oficial y vuelve a probar."
+                            },
                             false,
                         )
                     };
@@ -1789,7 +2392,9 @@ fn local_provider_installed(provider: ProviderId) -> bool {
 
     if match provider {
         ProviderId::Ollama => available_on_path(&["ollama"]),
-        ProviderId::LmStudio => available_on_path(&["lm-studio", "lmstudio"]),
+        ProviderId::LmStudio => {
+            available_on_path(&["lm-studio", "lmstudio"]) || find_lms_cli().is_some()
+        }
         _ => true,
     } {
         return true;
@@ -1830,6 +2435,129 @@ fn local_provider_installed(provider: ProviderId) -> bool {
         };
         candidates.iter().any(|path| path.is_file())
     }
+}
+
+fn find_lms_cli() -> Option<PathBuf> {
+    let executable = if cfg!(target_os = "windows") {
+        "lms.exe"
+    } else {
+        "lms"
+    };
+    let mut candidates = Vec::new();
+    if let Some(paths) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&paths).map(|dir| dir.join(executable)));
+    }
+    if let Some(home) = std::env::var_os(if cfg!(target_os = "windows") {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    }) {
+        candidates.push(PathBuf::from(home).join(".lmstudio/bin").join(executable));
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn lm_studio_local_port(endpoint: &str) -> Result<u16, Diagnostic> {
+    let url = url::Url::parse(endpoint).map_err(|_| {
+        Diagnostic::new(
+            "INVALID_ENDPOINT",
+            "Endpoint de LM Studio no válido",
+            "La URL de LM Studio no se puede interpretar.",
+            "La dirección está incompleta o tiene un formato incorrecto.",
+            "Usa http://127.0.0.1:1234/v1 o corrige la URL.",
+            false,
+        )
+    })?;
+    if url.scheme() != "http"
+        || !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+        || url.path().trim_end_matches('/') != "/v1"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(Diagnostic::new(
+            "INVALID_ENDPOINT",
+            "Solo se puede iniciar LM Studio local",
+            "El inicio automático requiere una URL local de LM Studio terminada en /v1.",
+            "No se iniciará un servidor para una dirección remota o ambigua.",
+            "Usa http://127.0.0.1:1234/v1 o inicia el servidor manualmente.",
+            false,
+        ));
+    }
+    Ok(url.port().unwrap_or(80))
+}
+
+#[tauri::command]
+pub async fn start_lm_studio_server(endpoint: String) -> Result<(), Diagnostic> {
+    let port = lm_studio_local_port(&endpoint)?;
+    let bind = if url::Url::parse(&endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(String::from))
+        .as_deref()
+        == Some("[::1]")
+    {
+        "::1"
+    } else {
+        "127.0.0.1"
+    };
+    let cli = find_lms_cli().ok_or_else(|| {
+        Diagnostic::new(
+            "PROVIDER_NOT_INSTALLED",
+            "No se encontró el comando de LM Studio",
+            "Vareliox no encontró lms en PATH ni en ~/.lmstudio/bin.",
+            "El CLI no está instalado o no es accesible.",
+            "Abre LM Studio y activa Start server en Developer, o instala/configura su CLI.",
+            false,
+        )
+    })?;
+    let mut command = tokio::process::Command::new(cli);
+    command.args([
+        "server",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--bind",
+        bind,
+    ]);
+    command.kill_on_drop(true);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let output = tokio::time::timeout(Duration::from_secs(30), command.output())
+        .await
+        .map_err(|_| {
+            Diagnostic::new(
+                "REQUEST_TIMEOUT",
+                "LM Studio tardó demasiado",
+                "El servidor no confirmó el inicio en 30 segundos.",
+                "El CLI sigue ocupado o no pudo iniciar el servicio.",
+                "Abre LM Studio, revisa Local Server y vuelve a probar.",
+                true,
+            )
+        })?
+        .map_err(|error| {
+            Diagnostic::new(
+                "UNKNOWN_ERROR",
+                "No se pudo iniciar LM Studio",
+                "Falló la ejecución del CLI local.",
+                "El CLI no pudo arrancar.",
+                "Inicia el servidor desde LM Studio y vuelve a probar.",
+                true,
+            )
+            .technical(error.to_string())
+        })?;
+    if !output.status.success() {
+        return Err(Diagnostic::new(
+            "SERVER_OFFLINE",
+            "LM Studio no inició el servidor",
+            "El comando lms server start terminó con error.",
+            "El servidor o el puerto puede estar ocupado.",
+            "Abre LM Studio y revisa Local Server; comprueba también el puerto del endpoint.",
+            true,
+        )
+        .technical(String::from_utf8_lossy(&output.stderr).to_string()));
+    }
+    Ok(())
 }
 
 fn context_messages(
@@ -2375,6 +3103,21 @@ mod tests {
     use super::*;
     use crate::ai::types::ExternalFolderGrant;
 
+    #[test]
+    fn lm_studio_launcher_accepts_only_local_api_endpoint() {
+        assert_eq!(
+            lm_studio_local_port("http://127.0.0.1:1234/v1").unwrap(),
+            1234
+        );
+        assert_eq!(
+            lm_studio_local_port("http://localhost:4444/v1/").unwrap(),
+            4444
+        );
+        assert!(lm_studio_local_port("https://example.com/v1").is_err());
+        assert!(lm_studio_local_port("http://127.0.0.1:1234/other").is_err());
+        assert!(lm_studio_local_port("http://user:pass@127.0.0.1:1234/v1").is_err());
+    }
+
     fn action_request(root: String) -> ChatRequest {
         ChatRequest {
             request_id: "test-request".into(),
@@ -2668,10 +3411,63 @@ mod tests {
             &json!({"artifacts":[{"base64":"AAAA","seed":12}]}),
             "image",
             "data:image/png;base64,",
+            &image,
         )
         .unwrap();
         assert_eq!(generated.data_url, "data:image/png;base64,AAAA");
         assert_eq!(generated.seed, Some(12));
+    }
+
+    #[test]
+    fn media_storage_rejects_invalid_data_and_paths_outside_the_project() {
+        assert_eq!(
+            decode_media_data_url("data:image/png;base64,aG9sYQ==").unwrap(),
+            b"hola"
+        );
+        assert!(decode_media_data_url("https://example.com/image.png").is_err());
+        let temporary = tempfile::tempdir().unwrap();
+        assert!(safe_project_media_path(temporary.path(), "assets/generated/image.png").is_ok());
+        assert!(safe_project_media_path(temporary.path(), "../outside.png").is_err());
+        assert!(safe_project_media_path(temporary.path(), "/tmp/outside.png").is_err());
+        let existing = temporary.path().join("existing.png");
+        fs::write(&existing, b"original").unwrap();
+        assert!(safe_project_media_path(temporary.path(), "existing.png").is_err());
+        assert_eq!(fs::read(&existing).unwrap(), b"original");
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), temporary.path().join("linked")).unwrap();
+            assert!(safe_project_media_path(temporary.path(), "linked/generated.png").is_err());
+            assert!(!outside.path().join("generated.png").exists());
+        }
+    }
+
+    #[test]
+    fn media_storage_never_overwrites_a_different_file_or_follows_symlinks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("media");
+        let first = store_media_bytes(&directory, "request-1", "image/png", b"first").unwrap();
+        assert_eq!(
+            store_media_bytes(&directory, "request-1", "image/png", b"first").unwrap(),
+            first
+        );
+        assert!(store_media_bytes(&directory, "request-1", "image/png", b"second").is_err());
+        assert_eq!(fs::read(&first).unwrap(), b"first");
+        assert!(store_media_bytes(&directory, "../escape", "image/png", b"bad").is_err());
+        #[cfg(unix)]
+        {
+            let outside = temporary.path().join("outside.png");
+            fs::write(&outside, b"outside").unwrap();
+            std::os::unix::fs::symlink(&outside, directory.join("request-2.png")).unwrap();
+            assert!(store_media_bytes(&directory, "request-2", "image/png", b"attack").is_err());
+            assert_eq!(fs::read(&outside).unwrap(), b"outside");
+            let linked_directory = temporary.path().join("linked-media");
+            std::os::unix::fs::symlink(&directory, &linked_directory).unwrap();
+            assert!(
+                store_media_bytes(&linked_directory, "request-3", "image/png", b"attack").is_err()
+            );
+            assert!(!directory.join("request-3.png").exists());
+        }
     }
 
     #[test]

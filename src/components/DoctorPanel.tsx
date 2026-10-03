@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2, CircleDashed, Play, Stethoscope, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
-import { activeProviderConfig, ai, asDiagnostic, providerDisplayName, providerMeta } from "../services/ai";
+import { activeProviderConfig, ai, asDiagnostic, providerChatModel, providerDisplayName, providerMeta } from "../services/ai";
 import { usePreferences } from "../services/preferences";
 import type { AiSettings, Diagnostic } from "../types";
 
@@ -14,7 +14,7 @@ export function DoctorPanel({ projectPath, settings, onOpenProviders }: Props) {
   const active = useMemo(() => activeProviderConfig(settings), [settings]);
   const checks: Result[] = [
     projectPath ? { status: "ok", title: t("Proyecto", "Project"), message: t("Carpeta accesible", "Folder available") } : { status: "warning", title: t("Proyecto", "Project"), message: t("No hay un proyecto abierto", "No project is open") },
-    active?.model ? { status: "ok", title: t("Modelo", "Model"), message: `${providerDisplayName(active)} · ${active.model}` } : { status: "warning", title: t("Modelo", "Model"), message: t("No hay un modelo seleccionado", "No model selected") },
+    providerChatModel(active) ? { status: "ok", title: t("Modelo", "Model"), message: `${providerDisplayName(active)} · ${providerChatModel(active)}` } : { status: "warning", title: t("Modelo", "Model"), message: t("No hay un modelo seleccionado", "No model selected") },
     active && (!providerMeta[active.provider].requiresKey || active.apiKeyConfigured) ? { status: "ok", title: t("Credenciales", "Credentials"), message: t("Configuración disponible", "Configuration available") } : { status: "warning", title: t("Credenciales", "Credentials"), message: t("Falta configurar la clave", "API key is not configured") },
     { status: "ok", title: t("Protección de archivos", "File protection"), message: t("Acceso limitado al proyecto", "Access is limited to the project") },
     ...(connection ? [connection] : []),

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>A local-first AI coding assistant for Windows, macOS, and Linux that explains what is happening.</strong>
+  <strong>A local-first AI workspace for chat, code, images, and video that explains what is happening.</strong>
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Oliver494/Vareliox-AI/releases/latest">Download for Windows, macOS, or Linux</a> ·
+  <a href="https://github.com/Oliver494/Vareliox-AI/releases/latest">Download for Windows or Linux</a> ·
   <a href="README.es.md">Español</a> ·
   <a href="ROADMAP.md">Roadmap</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -40,17 +40,20 @@ There is no Vareliox account, hosted project copy, or required subscription. Bri
 - **Clear diagnostics** — connection tests, timeouts, cancellation, provider-specific explanations, and recommended next steps.
 - **Your data stays under your control** — API keys use the operating-system credential store; Vareliox does not put them in the repository or browser storage.
 - **Made for everyday development** — chats per project, pinned conversations, search, image/file attachments, themes, and 12 interface languages.
+- **Media inside the conversation** — select image/video tools from `+` without changing the conversation model, download results, or save them to an authorized project.
+- **Managed local diffusion** — download Stable Diffusion 1.5 Q4 or AnimateDiff v3 together with their private runtime; manage installed models with confirmation before removal.
+- **A clearer workspace** — resizable unified sidebar, an automatically growing composer, capability-specific model pickers, and a project explorer with open-file tabs and inline rename.
 
 ## Download and install
 
 Download the package for your operating system from [Releases](https://github.com/Oliver494/Vareliox-AI/releases/latest):
 
 - **Windows:** run the x64 `.exe` installer.
-- **macOS (Apple Silicon or Intel):** open the universal `.dmg` and drag Vareliox into Applications.
+- **macOS (Apple Silicon or Intel):** source builds are available using the instructions below; this Windows/Linux release does not include a new macOS installer.
 - **Kali Linux / Debian / Ubuntu:** download the x86_64 `.deb` and install it with `sudo apt install ./Vareliox*.deb` from its download folder.
 - **Other x86_64 Linux distributions:** download the `.AppImage`, run `chmod +x ./Vareliox*.AppImage`, then open it with `./Vareliox*.AppImage`.
 
-End users do **not** need Node.js, Rust, Git, Ollama, or LM Studio to install the app. You only need Ollama or LM Studio if you want to use local models.
+End users do **not** need Node.js, Rust, Git, Ollama, or LM Studio to install the app. Local conversation models need Ollama or LM Studio. The integrated diffusion models prepare their own engine and do not require a separate ComfyUI installation.
 
 Windows may show a SmartScreen warning while the project does not yet have a trusted code-signing certificate. The macOS build is ad-hoc signed, so macOS can require approval in Privacy & Security until the project has an Apple Developer certificate and notarization. Linux packages are also currently unsigned. Always download packages from this repository's official Releases page.
 
@@ -106,6 +109,17 @@ Provider availability depends on your own installation, account, billing, model 
 - Use CMD or PowerShell on Windows and Bash or Zsh on macOS and Linux. Administrator mode uses the current Vareliox process permissions and never reads a password.
 - Keep file access project-only by default or deliberately authorize all filesystem roots. External changes always require review and Vareliox does not scan the full disk automatically.
 - Recover recent agent file operations from local snapshots.
+
+### Create images and short videos
+
+- Choose Image or Video in `+` before writing a description, even without a conversation model configured.
+- Select media models independently of the chat provider; the picker separates conversation, image and video.
+- Supported adapters include OpenAI Images, compatible Gemini image models, supported NVIDIA generation endpoints, verified custom OpenAI Images endpoints, and the managed local engine.
+- See generation progress, cancel, retry, download, and save results inside an authorized project.
+- Keep generated files in application data, with references in history rather than full base64 images.
+- Use the local library's Installed view to remove models with confirmation. Shared model weights, conversations and generated results are preserved when applicable.
+
+Media capabilities depend on the specific adapter and account, not only the model name. Local generation is experimental: AnimateDiff creates short silent clips, Windows currently uses a CPU engine, and Linux uses an Ubuntu 24.04 x86_64 Vulkan build that requires compatible system libraries and drivers. Cloud APIs require your own credits, quota and model access. See [local media details](docs/LOCAL_MEDIA.md) and [QA coverage](docs/QA.md). Windows/macOS visual behavior has not been verified by the Linux checks.
 
 ## Security and privacy
 

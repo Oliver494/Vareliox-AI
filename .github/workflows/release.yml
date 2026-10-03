@@ -46,7 +46,8 @@ jobs:
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
-            libxdo-dev
+            libxdo-dev \
+            gir1.2-webkit2-4.1 python3-gi xvfb xauth
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -59,6 +60,8 @@ jobs:
       - run: npm run test:frontend
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri build -- --bundles deb,appimage
+      - name: Linux WebKitGTK UI regression checks
+        run: bash scripts/test-visual-linux.sh
       - uses: actions/upload-artifact@v4
         with:
           name: vareliox-linux-${{ github.ref_name }}
@@ -71,6 +74,7 @@ jobs:
     needs: [windows, linux]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: vareliox-*-${{ github.ref_name }}
@@ -86,8 +90,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Vareliox $GITHUB_REF_NAME" \
-            --generate-notes \
-            --latest
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Vareliox $GITHUB_REF_NAME" \
+              --notes-file "$notes" --latest
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Vareliox $GITHUB_REF_NAME" \
+              --generate-notes --latest
+          fi

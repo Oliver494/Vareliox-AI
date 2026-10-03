@@ -1,7 +1,7 @@
 {
   "name": "vareliox",
   "private": true,
-  "version": "0.1.9",
+  "version": "0.1.10",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
@@ -13,10 +13,12 @@
     "test:targets": "node --test --experimental-strip-types tests/actionTargets.test.ts",
     "test:projects": "node --test --experimental-strip-types tests/projects.test.ts",
     "test:terminal": "node --test --experimental-strip-types tests/terminalAgent.test.ts",
+    "test:media": "node --test --experimental-strip-types tests/mediaIntent.test.ts",
+    "test:providers": "node --test --experimental-strip-types tests/providerCapabilities.test.ts",
     "test:translations": "node --test --experimental-strip-types tests/translations.test.ts",
     "test:secrets": "node scripts/check-secrets.mjs",
     "test:agent:local": "node scripts/smoke-agent-ollama.mjs",
-    "test:frontend": "npm run test:translations && npm run test:intents && npm run test:actions && npm run test:targets && npm run test:conversations && npm run test:projects && npm run test:terminal && npm run test:secrets",
+    "test:frontend": "npm run test:translations && npm run test:intents && npm run test:actions && npm run test:targets && npm run test:conversations && npm run test:projects && npm run test:terminal && npm run test:media && npm run test:providers && npm run test:secrets",
     "test:all": "npm run test:frontend && cargo test --manifest-path src-tauri/Cargo.toml",
     "check": "npm run test:all && npm run build && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "preview": "vite preview",

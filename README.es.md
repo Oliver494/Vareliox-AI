@@ -31,6 +31,14 @@ Vareliox es un espacio de trabajo de IA open source, centrado en IA local y dise
 - La salida real de los comandos vuelve al modelo para que pueda responder con datos comprobados del equipo.
 - Acceso al sistema de archivos limitado al proyecto de fábrica, con acceso completo opcional y revisión obligatoria fuera del proyecto.
 - Catálogo de modelos locales para Ollama y LM Studio.
+- Interfaz unificada con barra lateral redimensionable, explorador mejorado y cuadro de texto que crece automáticamente.
+- Imágenes y vídeos directamente en Chat y Code desde el menú `+`, sin sustituir el modelo de conversación.
+- Selectores separados para modelos de conversación, imagen y vídeo; las herramientas multimedia pueden elegirse antes de escribir.
+- Generación con los adaptadores compatibles de OpenAI, Gemini, NVIDIA, endpoints personalizados verificados y el motor local integrado.
+- Descarga integrada de Stable Diffusion 1.5 Q4 y AnimateDiff v3, incluido su motor privado: no necesitan instalar ComfyUI.
+- Progreso, cancelación, reintento, descarga de resultados y guardado dentro de un proyecto autorizado.
+- Biblioteca de modelos instalados con eliminación confirmada, conservando los archivos compartidos que necesite otro modelo.
+- Historial multimedia mediante referencias a archivos locales, migración de imágenes antiguas y limpieza explícita de archivos huérfanos.
 - Temas claro/oscuro y 12 idiomas.
 - Avisos de actualizaciones desde GitHub Releases.
 
@@ -42,9 +50,11 @@ Lee [SECURITY.md](SECURITY.md) antes de activar permisos de agente y [PRIVACY.md
 
 ## Instalación
 
-Descarga desde Releases el instalador `.exe` para Windows, el `.dmg` universal para Mac con Apple Silicon o Intel, el paquete `.deb` para Kali/Debian/Ubuntu o la AppImage para otras distribuciones Linux x86_64. En macOS, abre el `.dmg` y arrastra Vareliox a Aplicaciones. La compilación de macOS usa firma ad hoc, por lo que puede requerir autorización en Privacidad y seguridad hasta disponer de certificado y notarización de Apple. En Kali, instala el paquete con `sudo apt install ./Vareliox*.deb`.
+Descarga desde [Releases](https://github.com/Oliver494/Vareliox-AI/releases/latest) el instalador `.exe` para Windows, el paquete `.deb` para Kali/Debian/Ubuntu o la AppImage para otras distribuciones Linux x86_64. Esta actualización publica Windows y Linux; macOS puede compilarse desde el código con las instrucciones siguientes, pero no incluye un nuevo instalador de Mac. En Kali, instala el paquete con `sudo apt install ./Vareliox*.deb`.
 
 Los usuarios finales no necesitan instalar Node.js ni Rust.
+
+La generación multimedia depende del adaptador, los permisos del proveedor y sus cuotas. La generación local es experimental: AnimateDiff produce clips cortos sin audio, Windows utiliza actualmente un motor de CPU y Linux un motor Vulkan compilado para Ubuntu 24.04 x86_64 que requiere bibliotecas y controladores compatibles. Las comprobaciones visuales realizadas en Linux no verifican Windows ni macOS. Consulta [las limitaciones multimedia](docs/LOCAL_MEDIA.md) y [las pruebas realizadas](docs/QA.md).
 
 ## Desarrollo
 

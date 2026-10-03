@@ -1,6 +1,7 @@
-import { Check, Clipboard } from "lucide-react";
+import { Check, Clipboard, Download, FolderInput, LoaderCircle, RotateCcw, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { usePreferences } from "../services/preferences";
+import { providerMeta } from "../services/ai";
 import type { MediaGenerationResult } from "../types";
 
 type Segment =
@@ -134,16 +135,50 @@ function MarkdownText({ content }: { content: string }) {
   return <div className="assistant-markdown">{blocks}</div>;
 }
 
-export function AssistantMessageContent({ content, media }: { content: string; media?: MediaGenerationResult }) {
+function suggestedMediaPath(media: MediaGenerationResult) {
+  const extension = media.mimeType === "image/jpeg" ? "jpg" : media.mimeType === "image/webp" ? "webp" : media.mimeType === "video/webm" ? "webm" : media.mediaType === "video" ? "mp4" : "png";
+  return `assets/generated/${media.mediaType}-${media.id.slice(0, 8)}.${extension}`;
+}
+
+export function AssistantMessageContent({ content, media, onSaveToProject, onDownload, onRetry }: { content: string; media?: MediaGenerationResult; onSaveToProject?: (relativePath: string) => Promise<void>; onDownload?: () => Promise<void>; onRetry?: () => Promise<void> }) {
   const { t } = usePreferences();
-  function download() {
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [savePath, setSavePath] = useState(media ? suggestedMediaPath(media) : "");
+  const [saving, setSaving] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  async function download() {
     if (!media) return;
-    const link = document.createElement("a");
-    link.href = media.dataUrl;
-    link.download = `nova-${media.mediaType}-${Date.now()}.${media.mediaType === "video" ? "mp4" : "png"}`;
-    link.click();
+    setDownloadError(""); setDownloading(true);
+    try {
+      if (onDownload) await onDownload();
+      else {
+        const link = document.createElement("a");
+        link.href = media.dataUrl;
+        link.download = `vareliox-${media.mediaType}-${media.id.slice(0, 8)}`;
+        link.click();
+      }
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : String(error));
+    } finally { setDownloading(false); }
+  }
+  async function saveToProject() {
+    if (!onSaveToProject || !savePath.trim()) return;
+    setSaving(true); setSaveError(""); setSaved(false);
+    try { await onSaveToProject(savePath.trim()); setSaved(true); setSaveOpen(false); }
+    catch (error) { setSaveError(error instanceof Error ? error.message : String(error)); }
+    finally { setSaving(false); }
+  }
+  async function retry() {
+    if (!onRetry || retrying) return;
+    setRetrying(true);
+    try { await onRetry(); }
+    finally { setRetrying(false); }
   }
   return <div className="assistant-message-content">{splitCodeBlocks(content).map((segment, index) => segment.type === "code"
     ? <CodeBlock key={`code-${index}`} code={segment.value} language={segment.language} />
-    : segment.value ? <MarkdownText key={`text-${index}`} content={segment.value} /> : null)}{media && <figure className="assistant-generated-media">{media.mediaType === "image" ? <img src={media.dataUrl} alt={t("Imagen creada", "Created image")} /> : <video src={media.dataUrl} controls loop /> }<button type="button" onClick={download}>{t("Descargar", "Download")}</button></figure>}</div>;
+    : segment.value ? <MarkdownText key={`text-${index}`} content={segment.value} /> : null)}{media && <figure className="assistant-generated-media"><small className="generated-media-meta" title={media.model}>{providerMeta[media.provider]?.name ?? media.provider} · <code>{media.model}</code>{typeof media.elapsedMs === "number" && ` · ${(media.elapsedMs / 1000).toFixed(1)} s`}</small>{media.mediaType === "image" ? <img src={media.dataUrl} alt={t("Imagen creada", "Created image")} /> : <video src={media.dataUrl} controls loop /> }<figcaption><button type="button" onClick={() => void download()} disabled={downloading}>{downloading ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{t("Descargar", "Download")}</button>{onRetry && <button type="button" onClick={() => void retry()} disabled={retrying}>{retrying ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />}{t("Reintentar", "Retry")}</button>}{onSaveToProject && <button type="button" onClick={() => { setSaveOpen((open) => !open); setSaveError(""); }}><FolderInput size={14} />{saved ? t("Guardado en el proyecto", "Saved in project") : t("Guardar en el proyecto", "Save to project")}</button>}</figcaption>{downloadError && <small role="alert" className="media-download-error">{downloadError}</small>}{saveOpen && <div className="media-project-save"><label><span>{t("Ruta dentro del proyecto", "Path inside project")}</span><input value={savePath} onChange={(event) => setSavePath(event.target.value)} spellCheck={false} /></label><div><button type="button" onClick={() => setSaveOpen(false)} disabled={saving}><X size={13} />{t("Cancelar", "Cancel")}</button><button type="button" onClick={() => void saveToProject()} disabled={saving || !savePath.trim()}>{saving ? <LoaderCircle className="spin" size={13} /> : <FolderInput size={13} />}{t("Guardar", "Save")}</button></div>{saveError && <small role="alert">{saveError}</small>}</div>}</figure>}</div>;
 }
