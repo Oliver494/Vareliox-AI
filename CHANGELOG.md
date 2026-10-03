@@ -4,7 +4,7 @@ All notable changes will be documented here. The format follows Keep a Changelog
 
 ## [Unreleased]
 
-## [0.1.10] - 2026-10-03
+## [0.1.11] - 2026-10-03
 
 ### Added
 
@@ -28,6 +28,7 @@ All notable changes will be documented here. The format follows Keep a Changelog
 - Media models missing from a conversation-only picker and NVIDIA's separate generation catalog.
 - Image/video selection replacing the conversation model, and inconsistent default generation provider selection.
 - Updated the TLS dependency to address RUSTSEC-2026-0285 and replaced a yanked cryptography dependency.
+- Normalized paths in model-management regression tests for Windows and macOS. The 0.1.10 validation tag was not published as a release.
 
 ### Known limitations
 

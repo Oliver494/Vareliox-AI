@@ -1,6 +1,6 @@
 # Local security audit
 
-Last local review: 2026-10-03 (Vareliox 0.1.10).
+Last local review: 2026-10-03 (Vareliox 0.1.11).
 
 ## Results
 

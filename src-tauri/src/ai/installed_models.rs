@@ -252,7 +252,7 @@ mod tests {
         }
         assert_eq!(
             checked_model_file(dir.path(), "publisher/model.gguf").unwrap(),
-            model
+            model.canonicalize().unwrap()
         );
         assert!(model.exists());
     }
