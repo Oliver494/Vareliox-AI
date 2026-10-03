@@ -78,12 +78,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: vareliox-*-${{ github.ref_name }}
-          path: artifacts
+          path: ${{ runner.temp }}/vareliox-release-downloads
           merge-multiple: true
       - name: Prepare release files and checksums
         run: |
           mkdir release
-          find artifacts -type f -exec cp {} release/ \;
+          find "$RUNNER_TEMP/vareliox-release-downloads" -type f \
+            \( -name '*-setup.exe' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec cp {} release/ \;
+          version="${GITHUB_REF_NAME#v}"
+          test -f "release/Vareliox_${version}_x64-setup.exe"
+          test -f "release/Vareliox_${version}_amd64.deb"
+          test -f "release/Vareliox_${version}_amd64.AppImage"
+          test "$(find release -type f | wc -l)" -eq 3
           cd release
           sha256sum * > SHA256SUMS.txt
       - name: Publish GitHub release

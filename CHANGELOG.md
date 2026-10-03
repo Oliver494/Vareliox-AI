@@ -4,6 +4,8 @@ All notable changes will be documented here. The format follows Keep a Changelog
 
 ## [Unreleased]
 
+- Isolated release build downloads from checked-in screenshots and verified all three versioned installer names before publication.
+
 ## [0.1.11] - 2026-10-03
 
 ### Added
