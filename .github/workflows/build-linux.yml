@@ -38,7 +38,7 @@ jobs:
       - run: npm ci
       - run: npm run test:all
       - run: npm run build:linux
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vareliox-linux-x86_64
           path: |
