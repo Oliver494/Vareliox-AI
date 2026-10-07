@@ -4,9 +4,11 @@ All notable changes will be documented here. The format follows Keep a Changelog
 
 ## [Unreleased]
 
-## [0.1.12] - 2026-10-07
+## [0.1.13] - 2026-10-07
 
 ### Fixed
+
+- Updated `source-map-js` to 1.2.2 to address GHSA-68fv-2mgg-jv7q. The 0.1.12 validation tag was not published as a release.
 
 - Fixed Code summaries and project analyses being mistaken for file edits, triggering action-format retries that erased the response.
 - Retained previous responses during operation repairs, rejected partial operations after repair errors, and stopped continuations from reviving unrelated older write requests.

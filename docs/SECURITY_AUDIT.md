@@ -1,11 +1,12 @@
 # Local security audit
 
-Last local review: 2026-10-03 (Vareliox 0.1.11).
+Last local review: 2026-10-07 (Vareliox 0.1.13).
 
 ## Results
 
 - Frontend secret scan: passed.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
+- Updated `source-map-js` to 1.2.2 to address GHSA-68fv-2mgg-jv7q.
 - RustSec `cargo audit`: no vulnerability failure; 7 dependency warnings.
 - Updated `rustls` to 0.23.45 to address RUSTSEC-2026-0285, and replaced the yanked `chacha20` 0.10.1 with 0.10.2.
 - Agent path traversal, symlink, ignored-folder, command allowlist, cancellation, rollback, and credential-redaction tests: passed.
