@@ -4,6 +4,12 @@ All notable changes will be documented here. The format follows Keep a Changelog
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-10-07
+
+### Fixed
+
+- Fixed Code summaries and project analyses being mistaken for file edits, triggering action-format retries that erased the response.
+- Retained previous responses during operation repairs, rejected partial operations after repair errors, and stopped continuations from reviving unrelated older write requests.
 - Isolated release build downloads from checked-in screenshots and verified all three versioned installer names before publication.
 
 ## [0.1.11] - 2026-10-03

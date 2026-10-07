@@ -934,12 +934,13 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
     let actionStreamComplete = false;
     let streamedActions: AiProjectAction[] = [];
     let streamedActionPromise: Promise<void> | null = null;
+    let repairingActionFormat = false;
 
     const applyCompletedActionStream = () => {
       // An explicit filesystem destination must first be mapped to an
       // authorized root. Wait for the complete response instead of applying
       // relative paths early to the currently open project.
-      if (requestedActionPath || plannedPackageInstall || !actionExpected || streamedActionPromise || !assistantBuffer.current.includes("</nova_actions>")) return;
+      if (repairingActionFormat || requestedActionPath || plannedPackageInstall || !actionExpected || streamedActionPromise || !assistantBuffer.current.includes("</nova_actions>")) return;
       const actions = ensureNodeProjectActions(prompt, normalizeCreatedFolderContents(proposedActions(assistantBuffer.current), prompt, base));
       if (!actions.length) return;
       streamedActions = actions;
@@ -955,7 +956,7 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
       if (event.type === "reasoning") setStatus(t("Generando respuesta…", "Generating response…"));
       if (event.type === "delta") {
         assistantBuffer.current += event.text;
-        if (!streamedActionPromise) updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: entry.content + event.text } : entry), updatedAt: Date.now() }));
+        if (!repairingActionFormat && !streamedActionPromise) updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: entry.content + event.text } : entry), updatedAt: Date.now() }));
         applyCompletedActionStream();
       }
       if (event.type === "done") { setStatus(`${t("Completado en", "Completed in")} ${(event.elapsedMs / 1000).toFixed(1)} s`); setWaitMs(event.elapsedMs); }
@@ -1022,15 +1023,31 @@ export function ChatPane({ mode, activeWorkspace, project, projects, openFiles, 
         // wrapper. Treat that as an editable file instead of discarding it.
         actions = codeBlockAction(assistantBuffer.current, prompt);
       }
+      const originalAnswer = assistantBuffer.current;
       for (let attempt = 1; actionExpected && !actions.length && !interrupted && attempt <= 2; attempt += 1) {
         setStatus(`Corrigiendo el formato de la operación (${attempt}/2)…`);
         const failedAnswer = assistantBuffer.current;
+        repairingActionFormat = true;
         assistantBuffer.current = "";
-        updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: "", reasoning: undefined } : entry), updatedAt: Date.now() }));
+        // Keep the received answer visible while a replacement is validated.
+        // A timeout, empty repair or cancellation must never erase it.
         await runRequest([...requestHistory, { role: "assistant", content: failedAnswer.slice(-24_000) }, { role: "user", content: actionRepairPrompt(prompt, attempt) }]);
         actions = proposedActions(assistantBuffer.current);
         terminalAction = systemInfoActionForPrompt(prompt) ?? plannedPackageInstall ?? proposedTerminal(assistantBuffer.current);
         if (!actions.length) actions = codeBlockAction(assistantBuffer.current, prompt);
+      }
+      if (repairingActionFormat) {
+        repairingActionFormat = false;
+        if (actions.length && !interrupted) {
+          // A valid repair can contain only the operation block. Retain the
+          // original explanation instead of replacing it with an empty bubble.
+          if (!visibleAnswer(assistantBuffer.current)) assistantBuffer.current = `${visibleAnswer(originalAnswer)}\n\n${assistantBuffer.current}`.trim();
+          updateConversationById(conversationId, (item) => ({ ...item, messages: item.messages.map((entry) => entry.id === assistantMessage.id ? { ...entry, content: assistantBuffer.current } : entry), updatedAt: Date.now() }));
+        } else {
+          assistantBuffer.current = originalAnswer;
+          actions = [];
+          terminalAction = null;
+        }
       }
       if (actions.length && actionExpected) {
         actions = ensureNodeProjectActions(prompt, normalizeCreatedFolderContents(actions, prompt, base));

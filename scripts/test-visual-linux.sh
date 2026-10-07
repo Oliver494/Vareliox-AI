@@ -27,3 +27,4 @@ check_ui 'http://127.0.0.1:1420/tests/visual-media.html?provider=gemini&theme=li
 check_ui 'http://127.0.0.1:1420/tests/visual-media.html?provider=open_ai' 1920 1080
 check_ui 'http://127.0.0.1:1420/tests/visual-media.html?missing=true' 1280 720
 check_ui 'http://127.0.0.1:1420/tests/visual-providers.html' 1280 720
+check_ui 'http://127.0.0.1:1420/tests/visual-code-summary.html' 1280 720

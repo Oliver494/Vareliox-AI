@@ -65,3 +65,34 @@ test("una guía no hereda una operación anterior", () => {
   assert.equal(requestsProjectAction("dame los pasos para poner mi bot de Discord", history("créame un bot de Discord")), false);
   assert.equal(requestsProjectAction("haz una guía en README.md", history("créame un bot de Discord")), true);
 });
+
+test("un análisis o resumen en Code no requiere operaciones de archivos", () => {
+  for (const prompt of [
+    "hazme un análisis de un proyecto para hacerme un resumen",
+    "haz un resumen de este proyecto",
+    "genera un análisis del archivo README.md",
+    "créame un resumen de los archivos index.ts y config.json",
+    "necesito que realices una auditoría del proyecto",
+    "make a summary of the project",
+    "hazme un informe del proyecto",
+    "generate an analysis of README.md",
+  ]) assert.equal(requestsProjectAction(prompt, history("crea una página web")), false, prompt);
+});
+
+test("el análisis puede guardarse o acompañarse de cambios explícitos", () => {
+  for (const prompt of [
+    "analiza el proyecto y guarda el resumen en informe.md",
+    "crea un archivo resumen.md con el análisis",
+    "haz un archivo con el resumen del proyecto",
+    "analiza el código y corrige los errores",
+    "analiza el proyecto y mejora el código",
+    "fix the project and provide a summary",
+    "analyze the project and save the summary in report.md",
+  ]) assert.equal(requestsProjectAction(prompt, []), true, prompt);
+});
+
+test("continuar un resumen no reactiva una escritura antigua", () => {
+  const messages = [...history("crea index.html"), ...history("hazme un análisis del proyecto")];
+  assert.equal(requestsProjectAction("continúa", messages), false);
+  assert.equal(requestsProjectAction("hazlo", [...messages, ...history("sí")]), false);
+});

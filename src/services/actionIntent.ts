@@ -21,17 +21,24 @@ const INFORMATIONAL_PREFIX = /^(?:como|que|cual|por que|explica|explicame|dime|h
 const GUIDANCE_REQUEST = /\b(?:pasos?|instrucciones?|guia|tutorial|documentacion|documenta(?:cion)?|como (?:hago|se|puedo|poner|instalar|usar|ejecutar|configurar)|dame (?:los )?(?:pasos?|instrucciones?|una guia)|ensename|ayudame a (?:usar|poner|instalar|ejecutar|configurar)|how to|walk ?me through|step by step|instructions?|guide|tutorial|documentation)\b/u;
 const EXPLICIT_FILE_TARGET = /\b[\w.-]+\.(?:html?|css|m?js|jsx|tsx?|json|md|txt|py|rs|java|go|yml|yaml|toml)\b|\b(?:archivo|file|readme|documento)\b/u;
 const CONTINUATION = /^(?:si|hazlo|continua|sigue|adelante|ok|vale|do it|continue|go ahead)[!.\s]*$/u;
+const ANALYSIS_REQUEST = /\b(?:analisis|analiza(?:r|me)?|analices|resumen|resume(?:me)?|resumir|resumas|informe|reporte|auditoria|inspeccion|diagnostico|descripcion|analysis|analyze|analyse|summary|summarize|summarise|overview|report|audit|review)\b/u;
+// "Hazme" and "make" are also conversational verbs. Analysis is read-only
+// unless the user separately requests saving it or changing the workspace.
+const SAVE_ANALYSIS = /\b(?:guarda(?:me|lo|la)?|guardes|exporta(?:me|lo|la)?|exportes|save|export)\b/u;
+const CREATE_ANALYSIS_FILE = /\b(?:crea(?:me)?|haz(?:me)?|genera(?:me)?|escribe|create|make|generate|write)\s+(?:(?:un|una|el|la|a|an|the)\s+)?(?:archivo|fichero|file|[\w.-]+\.(?:md|txt|html?|json))\b/u;
+const SEPARATE_MUTATION = /(?:^|[;,.]|\b(?:y|luego|despues|ademas|and|then)\s+)(?:\s*)(?:edita(?:me)?|modifica(?:me)?|corrige|arregla(?:me)?|actualiza(?:me)?|refactoriza|mejora(?:me)?|cambia(?:me)?|implementa|elimina(?:me)?|borra(?:me)?|renombra(?:me)?|mueve|edit|modify|fix|improve|change|implement|update|refactor|delete|remove|rename|move)\b/u;
 
-function previousActionRequest(history: Pick<ChatMessage, "role" | "content">[]) {
-  return [...history].reverse().some((item) => {
-    if (item.role !== "user") return false;
+function previousActionRequest(history: Pick<ChatMessage, "role" | "content">[]): boolean {
+  for (const item of [...history].reverse()) {
+    if (item.role !== "user") continue;
     const value = normalize(item.content);
-    if (CONTINUATION.test(value)) return false;
-    return (ACTION_VERB.test(value) || ACTION_SUBJUNCTIVE.test(value)) && !INFORMATIONAL_PREFIX.test(value);
-  });
+    if (CONTINUATION.test(value)) continue;
+    return requestsProjectAction(value, []);
+  }
+  return false;
 }
 
-export function requestsProjectAction(prompt: string, history: Pick<ChatMessage, "role" | "content">[]) {
+export function requestsProjectAction(prompt: string, history: Pick<ChatMessage, "role" | "content">[]): boolean {
   const current = normalize(prompt).replace(/[¿?]/g, "").trim();
 
   // Explanatory questions may mention words such as "crear" without asking
@@ -40,6 +47,7 @@ export function requestsProjectAction(prompt: string, history: Pick<ChatMessage,
   // Do not turn a request for setup steps into archivo.txt merely because it
   // contains an action verb. An explicitly named file remains an operation.
   if (GUIDANCE_REQUEST.test(current) && !EXPLICIT_FILE_TARGET.test(current)) return false;
+  if (ANALYSIS_REQUEST.test(current) && !SAVE_ANALYSIS.test(current) && !CREATE_ANALYSIS_FILE.test(current) && !SEPARATE_MUTATION.test(current)) return false;
   if (CONTINUATION.test(current)) {
     return previousActionRequest(history);
   }

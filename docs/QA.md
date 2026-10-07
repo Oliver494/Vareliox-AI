@@ -83,10 +83,17 @@ The provider fixture additionally tests cancellation and confirmation of deletio
 cleared media selection and preservation of an unrelated active cloud provider.
 No actual user model was deleted during testing.
 
-Run `bash scripts/test-visual-linux.sh` for the eight-case release regression suite.
+Run `bash scripts/test-visual-linux.sh` for the nine-case release regression suite.
 It starts and stops its own Vite server and uses Xvfb when available, or the current
 Linux display otherwise. The Linux release job runs this suite before uploading
 installers; failed UI checks prevent publication.
+
+`tests/visual-code-summary.html` uses the production Code interface and a mocked
+stream to verify that project summaries remain visible and persisted after Done,
+do not trigger action repairs, and do not block subsequent questions. It also
+tests a repair timeout, rejected partial operations, and a successful JSON-only
+repair that preserves the explanation and still requests approval. No real
+provider credentials or project writes are used in this fixture.
 
 Rust tests cover model path traversal, symlink rejection, unknown model IDs and
 shared diffusion weight retention. The opt-in hardware test was rerun successfully
