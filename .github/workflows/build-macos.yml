@@ -26,7 +26,7 @@ jobs:
       - run: npm run test:frontend
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run build:macos
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: vareliox-macos-universal-unsigned
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
