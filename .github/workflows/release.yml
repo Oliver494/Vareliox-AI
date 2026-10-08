@@ -26,7 +26,7 @@ jobs:
       - run: npm run test:frontend
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri build -- --bundles nsis
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: vareliox-windows-${{ github.ref_name }}
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
@@ -62,7 +62,7 @@ jobs:
       - run: npm run tauri build -- --bundles deb,appimage
       - name: Linux WebKitGTK UI regression checks
         run: bash scripts/test-visual-linux.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: vareliox-linux-${{ github.ref_name }}
           path: |
